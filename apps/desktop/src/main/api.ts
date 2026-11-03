@@ -1,5 +1,6 @@
 import {
   ChallengeResponse,
+  CreateInviteResponse,
   LinkRequestResponse,
   MeResponse,
   PendingLink,
@@ -21,6 +22,7 @@ import {
 } from '@silo/protocol';
 import { z } from 'zod';
 import type { AccountView, LinkTicket, PendingDevice, RecoverInput, SignupInput } from '../shared/ipc.js';
+import { runSpaceAction } from './spaces.js';
 
 /** Plain http is only allowed to this machine, for local development. */
 export function normalizeServerUrl(input: string): string {
@@ -36,7 +38,7 @@ export function normalizeServerUrl(input: string): string {
 async function call<T>(base: string, path: string, init: RequestInit, parse: (v: unknown) => T): Promise<T> {
   const res = await fetch(base + path, {
     ...init,
-    headers: { 'content-type': 'application/json', ...init.headers },
+    headers: { ...(init.body === undefined ? {} : { 'content-type': 'application/json' }), ...init.headers },
     redirect: 'error',
   });
   const body = res.status === 204 ? undefined : await res.json().catch(() => undefined);
@@ -241,6 +243,16 @@ export class SiloClient {
       signature: sign(rotateRecoveryPayload(s.userId, recoveryPublicKey), next.secretKey),
     });
     return { recoveryKey: formatRecoveryKey(next.secretKey) };
+  }
+
+  createAccountInvite() {
+    return this.post('/v1/invites', { maxUses: 1, expiresInHours: 72 }, (v) => CreateInviteResponse.parse(v));
+  }
+
+  space(action: unknown): Promise<unknown> {
+    return runSpaceAction(action, (method, path, body, parse) =>
+      this.authed(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, parse),
+    );
   }
 
   async me(): Promise<AccountView> {

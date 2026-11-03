@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { AccountView, DeviceInfo, LinkTicket, PendingDevice, Result } from '../shared/ipc';
+import type { AccountView, DeviceInfo, LinkTicket, PendingDevice, Result, SpaceSummary } from '../shared/ipc';
+import { NewSpace, Sidebar, SpacePage } from './Spaces';
 
 type Mode = 'signup' | 'login' | 'link' | 'recover';
 
@@ -16,7 +17,7 @@ export function App() {
   }, []);
 
   if (recoveryKey) return <RecoveryKeyScreen recoveryKey={recoveryKey} onDone={() => setRecoveryKey(undefined)} />;
-  if (account) return <AccountScreen account={account} onChange={setAccount} onRecoveryKey={setRecoveryKey} onSignedOut={() => setAccount(undefined)} />;
+  if (account) return <Home account={account} onChange={setAccount} onRecoveryKey={setRecoveryKey} onSignedOut={() => setAccount(undefined)} />;
   if (ticket) {
     return (
       <WaitingForApproval
@@ -216,6 +217,51 @@ function WaitingForApproval({ ticket, onApproved, onCancel }: { ticket: LinkTick
   );
 }
 
+type View = { kind: 'account' } | { kind: 'new' } | { kind: 'space'; id: string };
+
+function Home(props: {
+  account: AccountView;
+  onChange: (a: AccountView) => void;
+  onRecoveryKey: (key: string) => void;
+  onSignedOut: () => void;
+}) {
+  const [spaces, setSpaces] = useState<SpaceSummary[]>([]);
+  const [view, setView] = useState<View>({ kind: 'account' });
+
+  async function refresh(select?: View) {
+    const result = await window.silo.space({ kind: 'list' });
+    if (result.ok) {
+      setSpaces(result.value);
+      if (select) setView(select);
+      else if (result.value[0] && view.kind === 'account') setView({ kind: 'space', id: result.value[0].id });
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="shell">
+      <Sidebar
+        spaces={spaces}
+        selected={view.kind === 'space' ? view.id : view.kind === 'new' ? 'new' : undefined}
+        accountSelected={view.kind === 'account'}
+        onSelect={(id) => setView(id === 'new' ? { kind: 'new' } : { kind: 'space', id })}
+        onAccount={() => setView({ kind: 'account' })}
+      />
+      {view.kind === 'new' && <NewSpace onDone={(s) => void refresh({ kind: 'space', id: s.id })} />}
+      {view.kind === 'space' && <SpacePage key={view.id} spaceId={view.id} onGone={() => void refresh({ kind: 'new' })} />}
+      {view.kind === 'account' && (
+        <div className="content">
+          <AccountScreen {...props} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AccountScreen({
   account,
   onChange,
@@ -229,10 +275,13 @@ function AccountScreen({
 }) {
   const [pairingCode, setPairingCode] = useState('');
   const [pending, setPending] = useState<PendingDevice>();
+  const [accountInvite, setAccountInvite] = useState<{ code: string; expiresAt: string }>();
   const { busy, error, run } = useAction();
 
   return (
-    <Panel title={`Signed in as ${account.username}`} subtitle="These devices can sign in to your account. Revoke any you don't recognise.">
+    <div>
+      <h1>Signed in as {account.username}</h1>
+      <p className="muted">These devices can sign in to your account. Revoke any you don't recognise.</p>
       <ul className="devices">
         {account.devices.map((d) => (
           <li key={d.id}>
@@ -290,6 +339,20 @@ function AccountScreen({
         </div>
       )}
 
+      <h2>Invite someone to Silo</h2>
+      <p className="muted">New people need a one-time code to create an account. To add them to a server, send them a server invite too.</p>
+      <div className="row">
+        <button disabled={busy} onClick={() => void run(() => window.silo.createAccountInvite(), setAccountInvite)}>
+          Create sign-up code
+        </button>
+      </div>
+      {accountInvite && (
+        <p className="muted">
+          Works once, expires {new Date(accountInvite.expiresAt).toLocaleString()}.
+          <code className="block" data-testid="account-invite">{accountInvite.code}</code>
+        </p>
+      )}
+
       {error && <div className="error">{error}</div>}
 
       <div className="row">
@@ -305,6 +368,6 @@ function AccountScreen({
           Log out
         </button>
       </div>
-    </Panel>
+    </div>
   );
 }

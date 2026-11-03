@@ -15,4 +15,6 @@ contextBridge.exposeInMainWorld('silo', {
   revokeDevice: invoke('silo:revoke-device'),
   recover: invoke('silo:recover'),
   rotateRecoveryKey: invoke('silo:rotate-recovery-key'),
+  space: invoke('silo:space'),
+  createAccountInvite: invoke('silo:create-account-invite'),
 });

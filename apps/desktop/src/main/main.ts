@@ -97,6 +97,8 @@ app.whenReady().then(async () => {
   handle(IPC.revokeDevice, (input: { deviceId: string }) => wrap(() => need().revokeDevice(input.deviceId)));
   handle(IPC.recover, (input: RecoverInput) => wrap(() => need().recover(input)));
   handle(IPC.rotateRecoveryKey, () => wrap(() => need().rotateRecoveryKey()));
+  handle(IPC.createAccountInvite, () => wrap(() => need().createAccountInvite()));
+  handle(IPC.space, (action: unknown) => wrap(() => need().space(action)));
 
   await createWindow();
   app.on('activate', () => {

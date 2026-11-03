@@ -15,7 +15,50 @@ export interface SiloBridge {
   revokeDevice(input: { deviceId: string }): Promise<Result<AccountView>>;
   recover(input: RecoverInput): Promise<Result<{ account: AccountView; recoveryKey: string }>>;
   rotateRecoveryKey(): Promise<Result<{ recoveryKey: string }>>;
+  /** Creates a code that lets someone new sign up. */
+  createAccountInvite(): Promise<Result<{ code: string; expiresAt: string; maxUses: number }>>;
+  /** Everything to do with servers goes through one call, validated in the main process. */
+  space<A extends SpaceAction>(action: A): Promise<Result<SpaceResult<A>>>;
 }
+
+export type Role = 'owner' | 'admin' | 'member';
+
+export interface SpaceSummary {
+  id: string;
+  name: string;
+  role: Role;
+}
+
+export interface SpaceView extends SpaceSummary {
+  channels: { id: string; name: string; position: number }[];
+  members: { userId: string; username: string; role: Role; joinedAt: string }[];
+  bans?: { userId: string; username: string; bannedAt: string }[];
+}
+
+export type SpaceAction =
+  | { kind: 'list' }
+  | { kind: 'create'; name: string }
+  | { kind: 'get'; spaceId: string }
+  | { kind: 'join'; code: string }
+  | { kind: 'leave'; spaceId: string }
+  | { kind: 'delete'; spaceId: string }
+  | { kind: 'createChannel'; spaceId: string; name: string }
+  | { kind: 'deleteChannel'; spaceId: string; channelId: string }
+  | { kind: 'createInvite'; spaceId: string }
+  | { kind: 'kick'; spaceId: string; userId: string }
+  | { kind: 'ban'; spaceId: string; userId: string }
+  | { kind: 'unban'; spaceId: string; userId: string }
+  | { kind: 'setRole'; spaceId: string; userId: string; role: 'admin' | 'member' };
+
+export type SpaceResult<A extends SpaceAction> = A['kind'] extends 'list'
+  ? SpaceSummary[]
+  : A['kind'] extends 'create' | 'join'
+    ? SpaceSummary
+    : A['kind'] extends 'createInvite'
+      ? { code: string; expiresAt: string; maxUses: number }
+      : A['kind'] extends 'leave' | 'delete'
+        ? null
+        : SpaceView;
 
 export interface DeviceInfo {
   publicKey: string;
@@ -70,4 +113,6 @@ export const IPC = {
   revokeDevice: 'silo:revoke-device',
   recover: 'silo:recover',
   rotateRecoveryKey: 'silo:rotate-recovery-key',
+  space: 'silo:space',
+  createAccountInvite: 'silo:create-account-invite',
 } as const;

@@ -29,7 +29,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.query('TRUNCATE users, devices, invites, challenges, sessions, device_links CASCADE');
+  await db.query('TRUNCATE users, devices, invites, challenges, sessions, device_links, spaces CASCADE');
 });
 
 export const pub = (kp: DeviceKeyPair) => toBase64Url(kp.publicKey);
@@ -69,3 +69,11 @@ export async function login(kp: DeviceKeyPair) {
 export const invite = (maxUses = 1) => createInvite(db, { createdBy: null, maxUses, expiresInHours: 1 }).then((i) => i.code);
 export const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
+
+/** Signs up a fresh user and returns their token and id. */
+export async function newUser(username: string) {
+  const res = await signup(generateDeviceKeyPair(), username, await invite());
+  expect(res.statusCode).toBe(201);
+  const { token, userId } = res.json() as { token: string; userId: string };
+  return { token, userId, headers: bearer(token) };
+}
