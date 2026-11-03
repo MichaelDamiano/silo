@@ -7,6 +7,7 @@ import { HttpError } from './errors.js';
 import { accountRoutes } from './routes/accounts.js';
 import { deviceRoutes } from './routes/devices.js';
 import { inviteRoutes } from './routes/invites.js';
+import { spaceRoutes } from './routes/spaces.js';
 
 export async function buildApp(config: Config, db: Db, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({
@@ -46,5 +47,6 @@ export async function buildApp(config: Config, db: Db, opts: { logger?: boolean 
   await app.register(accountRoutes, { db, config });
   await app.register(deviceRoutes, { db, config });
   await app.register(inviteRoutes, { db });
+  await app.register(spaceRoutes, { db });
   return app;
 }
