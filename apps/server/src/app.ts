@@ -8,6 +8,8 @@ import { accountRoutes } from './routes/accounts.js';
 import { deviceRoutes } from './routes/devices.js';
 import { inviteRoutes } from './routes/invites.js';
 import { spaceRoutes } from './routes/spaces.js';
+import { messagingRoutes } from './routes/messaging.js';
+import { LiveHub, liveRoutes } from './live.js';
 
 export async function buildApp(config: Config, db: Db, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({
@@ -43,10 +45,15 @@ export async function buildApp(config: Config, db: Db, opts: { logger?: boolean 
     return reply.code(500).send({ error: 'internal error' });
   });
 
+  app.decorate('live', new LiveHub());
+  app.addHook('onClose', async () => app.live.closeAll());
+
   app.get('/healthz', async () => ({ ok: true }));
   await app.register(accountRoutes, { db, config });
   await app.register(deviceRoutes, { db, config });
   await app.register(inviteRoutes, { db });
   await app.register(spaceRoutes, { db });
+  await app.register(messagingRoutes, { db });
+  await app.register(liveRoutes, { db });
   return app;
 }

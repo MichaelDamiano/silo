@@ -141,6 +141,7 @@ export async function deviceRoutes(app: FastifyInstance, opts: { db: Db; config:
     if (!verify(body.deviceSignature, payload, body.devicePublicKey) || !verify(body.recoverySignature, payload, body.recoveryPublicKey)) {
       throw authFailed();
     }
+    const revokedIds: string[] = [];
     const result = await withTransaction(db, async (client) => {
       const user = await client.query<{ id: string }>(
         'SELECT id FROM users WHERE username = $1 AND recovery_public_key = $2 FOR UPDATE',
@@ -153,7 +154,11 @@ export async function deviceRoutes(app: FastifyInstance, opts: { db: Db; config:
           WHERE revoked_at IS NULL AND device_id IN (SELECT id FROM devices WHERE user_id = $1)`,
         [userId],
       );
-      await client.query('UPDATE devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
+      const revoked = await client.query<{ id: string }>(
+        'UPDATE devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL RETURNING id',
+        [userId],
+      );
+      revokedIds.push(...revoked.rows.map((r) => r.id));
       await client.query('DELETE FROM device_links WHERE user_id = $1', [userId]);
       let deviceId: string;
       try {
@@ -169,6 +174,7 @@ export async function deviceRoutes(app: FastifyInstance, opts: { db: Db; config:
       const session = await createSession(client, deviceId, config.sessionTtlMs);
       return { userId, deviceId, ...session };
     });
+    app.live.disconnect(revokedIds);
     reply.code(201);
     return { token: result.token, expiresAt: result.expiresAt.toISOString(), userId: result.userId, deviceId: result.deviceId };
   });

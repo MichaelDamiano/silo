@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { Role, SpaceAction, SpaceResult, SpaceSummary, SpaceView } from '../shared/ipc';
+import type { ConversationSummary, Role, SpaceAction, SpaceResult, SpaceSummary, SpaceView } from '../shared/ipc';
 
 /** Mirrors the server's rule: owners manage everyone but owners, admins manage members. */
 function canManage(actor: Role, target?: Role) {
@@ -20,12 +20,18 @@ export function Sidebar({
   onSelect,
   onAccount,
   accountSelected,
+  conversations,
+  selectedDm,
+  onSelectDm,
 }: {
   spaces: SpaceSummary[];
   selected?: string;
   onSelect: (id: string | 'new') => void;
   onAccount: () => void;
   accountSelected: boolean;
+  conversations: ConversationSummary[];
+  selectedDm?: string;
+  onSelectDm: (c: ConversationSummary) => void;
 }) {
   return (
     <nav className="sidebar" aria-label="Servers">
@@ -42,6 +48,17 @@ export function Sidebar({
       <button className="nav add" aria-current={selected === 'new'} onClick={() => onSelect('new')}>
         + Create or join
       </button>
+      <div className="sidebar-title">Direct messages</div>
+      <ul>
+        {conversations.map((c) => (
+          <li key={c.peerUserId}>
+            <button className="nav" aria-current={selectedDm === c.peerUserId} onClick={() => onSelectDm(c)}>
+              {c.peerUsername}
+            </button>
+          </li>
+        ))}
+        {conversations.length === 0 && <li className="muted hint">Open a member's name in a server to message them.</li>}
+      </ul>
       <div className="sidebar-spacer" />
       <button className="nav" aria-current={accountSelected} onClick={onAccount}>
         Account and devices
@@ -101,7 +118,17 @@ export function NewSpace({ onDone }: { onDone: (s: SpaceSummary) => void }) {
   );
 }
 
-export function SpacePage({ spaceId, onGone }: { spaceId: string; onGone: () => void }) {
+export function SpacePage({
+  spaceId,
+  onGone,
+  onMessage,
+  myUsername,
+}: {
+  spaceId: string;
+  onGone: () => void;
+  onMessage: (userId: string, username: string) => void;
+  myUsername: string;
+}) {
   const [space, setSpace] = useState<SpaceView>();
   const [channelId, setChannelId] = useState<string>();
   const [newChannel, setNewChannel] = useState('');
@@ -178,7 +205,7 @@ export function SpacePage({ spaceId, onGone }: { spaceId: string; onGone: () => 
 
       <section className="content" aria-label="Messages">
         <h1># {channel?.name}</h1>
-        <p className="muted">End-to-end encrypted messages arrive in the next update.</p>
+        <p className="muted">Channel messages arrive in the next update. Direct messages are already end-to-end encrypted: choose Message next to a member.</p>
         {error && <div className="error">{error}</div>}
       </section>
 
@@ -189,6 +216,11 @@ export function SpacePage({ spaceId, onGone }: { spaceId: string; onGone: () => 
             <li key={m.userId} className="member">
               <div>
                 {m.username} {m.role !== 'member' && <span className="badge">{m.role}</span>}
+                {m.username !== myUsername && (
+                  <button className="link" onClick={() => onMessage(m.userId, m.username)}>
+                    Message
+                  </button>
+                )}
               </div>
               {canManage(space.role, m.role) && (
                 <div className="member-actions">

@@ -4,6 +4,7 @@ WORKDIR /app
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/protocol/package.json packages/protocol/
+COPY packages/signal/package.json packages/signal/
 COPY apps/server/package.json apps/server/
 COPY apps/desktop/package.json apps/desktop/
 RUN npm ci --workspace @silo/protocol --workspace @silo/server --include-workspace-root
@@ -16,6 +17,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 COPY packages/protocol/package.json packages/protocol/
+COPY packages/signal/package.json packages/signal/
 COPY apps/server/package.json apps/server/
 COPY apps/desktop/package.json apps/desktop/
 RUN npm ci --omit=dev --workspace @silo/protocol --workspace @silo/server && npm cache clean --force

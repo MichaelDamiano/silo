@@ -33,6 +33,7 @@ export const SIGNING_CONTEXT = {
   linkApprove: 'silo/v1/link-approve',
   recover: 'silo/v1/recover',
   rotateRecovery: 'silo/v1/rotate-recovery',
+  signalIdentity: 'silo/v1/signal-identity',
 } as const;
 
 export type SigningPurpose = keyof typeof SIGNING_CONTEXT;
@@ -82,6 +83,11 @@ export function verify(signature: string, payload: Uint8Array, publicKey: string
   } catch {
     return false;
   }
+}
+
+/** Signed by a device's login key to vouch for its Signal identity key (base64). */
+export function signalIdentityPayload(deviceId: string, signalIdentityKey: string): Uint8Array {
+  return signingPayload('signalIdentity', [deviceId, signalIdentityKey]);
 }
 
 /**
