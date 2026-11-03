@@ -1,72 +1,8 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { FastifyInstance } from 'fastify';
-import {
-  generateDeviceKeyPair,
-  loginPayload,
-  sign,
-  signupPayload,
-  toBase64Url,
-  type DeviceKeyPair,
-} from '@silo/protocol';
+import { describe, expect, it } from 'vitest';
+import { generateDeviceKeyPair, loginPayload, sign, signupPayload } from '@silo/protocol';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { createPool, migrate, type Db } from '../src/db.js';
-import { createInvite } from '../src/invites.js';
-
-const databaseUrl = process.env.TEST_DATABASE_URL ?? 'postgres://silo:silo@localhost:5432/silo_test';
-let db: Db;
-let app: FastifyInstance;
-
-beforeAll(async () => {
-  db = createPool(databaseUrl);
-  await migrate(db);
-  app = await buildApp(loadConfig({ DATABASE_URL: databaseUrl, AUTH_RATE_LIMIT_PER_MINUTE: '1000' }), db, { logger: false });
-});
-
-afterAll(async () => {
-  await app.close();
-  await db.end();
-});
-
-beforeEach(async () => {
-  await db.query('TRUNCATE users, devices, invites, challenges, sessions CASCADE');
-});
-
-const pub = (kp: DeviceKeyPair) => toBase64Url(kp.publicKey);
-
-async function challenge(kp: DeviceKeyPair) {
-  const res = await app.inject({ method: 'POST', url: '/v1/auth/challenge', payload: { devicePublicKey: pub(kp) } });
-  expect(res.statusCode).toBe(200);
-  return res.json() as { challengeId: string; nonce: string };
-}
-
-async function signup(kp: DeviceKeyPair, username: string, inviteCode: string) {
-  const c = await challenge(kp);
-  return app.inject({
-    method: 'POST',
-    url: '/v1/accounts',
-    payload: {
-      inviteCode,
-      username,
-      deviceName: 'Laptop',
-      devicePublicKey: pub(kp),
-      challengeId: c.challengeId,
-      signature: sign(signupPayload(c.nonce, username), kp.secretKey),
-    },
-  });
-}
-
-async function login(kp: DeviceKeyPair) {
-  const c = await challenge(kp);
-  return app.inject({
-    method: 'POST',
-    url: '/v1/auth/login',
-    payload: { devicePublicKey: pub(kp), challengeId: c.challengeId, signature: sign(loginPayload(c.nonce), kp.secretKey) },
-  });
-}
-
-const invite = (maxUses = 1) => createInvite(db, { createdBy: null, maxUses, expiresInHours: 1 }).then((i) => i.code);
-const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+import { app, bearer, challenge, databaseUrl, db, invite, login, pub, signup } from './helpers/setup.js';
 
 describe('sign-up', () => {
   it('creates an account with a valid invite and returns a working session', async () => {
@@ -104,8 +40,9 @@ describe('sign-up', () => {
         username: 'mike',
         deviceName: 'Laptop',
         devicePublicKey: pub(kp),
+        recoveryPublicKey: pub(generateDeviceKeyPair()),
         challengeId: c.challengeId,
-        signature: sign(signupPayload(c.nonce, 'mike'), attacker.secretKey),
+        signature: sign(signupPayload(c.nonce, 'mike', pub(kp)), attacker.secretKey),
       },
     });
     expect(res.statusCode).toBe(401);

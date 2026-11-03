@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, safeStorage, session, type IpcMainInvokeEvent } from 'electron';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { IPC, type Result, type SignupInput } from '../shared/ipc.js';
+import { IPC, type RecoverInput, type Result, type SignupInput } from '../shared/ipc.js';
 import { SiloClient } from './api.js';
 import { loadOrCreateDeviceKey, type SecretBox } from './keystore.js';
 
@@ -82,12 +82,21 @@ app.whenReady().then(async () => {
     return client;
   };
 
-  handle(IPC.deviceInfo, async () => ({ publicKey: client?.publicKey ?? '', secureStorage }));
+  handle(IPC.deviceInfo, async () => ({ publicKey: client?.publicKey ?? '', fingerprint: client?.fingerprint ?? '', secureStorage }));
   handle(IPC.signup, (input: SignupInput) => wrap(() => need().signup(input)));
   handle(IPC.login, (input: { serverUrl: string }) => wrap(() => need().login(input.serverUrl)));
   handle(IPC.logout, async () => {
     await client?.logout().catch(() => undefined);
   });
+  handle(IPC.requestLink, (input: { serverUrl: string; username: string; deviceName: string }) =>
+    wrap(() => need().requestLink(input)),
+  );
+  handle(IPC.checkLink, () => wrap(() => need().checkLink()));
+  handle(IPC.lookupLink, (input: { pairingCode: string }) => wrap(() => need().lookupLink(input.pairingCode)));
+  handle(IPC.approveLink, () => wrap(() => need().approveLink()));
+  handle(IPC.revokeDevice, (input: { deviceId: string }) => wrap(() => need().revokeDevice(input.deviceId)));
+  handle(IPC.recover, (input: RecoverInput) => wrap(() => need().recover(input)));
+  handle(IPC.rotateRecoveryKey, () => wrap(() => need().rotateRecoveryKey()));
 
   await createWindow();
   app.on('activate', () => {

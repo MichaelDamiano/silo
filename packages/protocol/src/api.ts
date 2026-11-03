@@ -21,9 +21,49 @@ export const SignupRequest = z.object({
   username: Username,
   deviceName: DeviceName,
   devicePublicKey: PublicKey,
+  recoveryPublicKey: PublicKey,
   challengeId: z.uuid(),
   signature: Signature,
 });
+
+/** A new device asks to join an account. It is shown a pairing code to enter on an existing device. */
+export const LinkRequest = z.object({
+  username: Username,
+  deviceName: DeviceName,
+  devicePublicKey: PublicKey,
+  challengeId: z.uuid(),
+  signature: Signature,
+});
+
+/** 10 characters from a 32-letter alphabet, so about 50 bits, valid for 10 minutes. */
+export const PairingCode = z
+  .string()
+  .transform((s) => s.replace(/[\s-]/g, '').toUpperCase())
+  .pipe(z.string().regex(/^[A-Z2-7]{10}$/, 'pairing code must be 10 letters or digits'));
+
+export const LinkRequestResponse = z.object({ pairingCode: z.string(), expiresAt: z.iso.datetime() });
+
+export const PendingLink = z.object({
+  linkId: z.uuid(),
+  deviceName: z.string(),
+  devicePublicKey: PublicKey,
+  fingerprint: z.string(),
+  expiresAt: z.iso.datetime(),
+});
+
+export const ApproveLinkRequest = z.object({ linkId: z.uuid(), signature: Signature });
+
+export const RecoverRequest = z.object({
+  username: Username,
+  deviceName: DeviceName,
+  devicePublicKey: PublicKey,
+  recoveryPublicKey: PublicKey,
+  challengeId: z.uuid(),
+  deviceSignature: Signature,
+  recoverySignature: Signature,
+});
+
+export const RotateRecoveryRequest = z.object({ recoveryPublicKey: PublicKey, signature: Signature });
 
 export const LoginRequest = z.object({
   devicePublicKey: PublicKey,
@@ -44,6 +84,8 @@ export const Device = z.object({
   publicKey: PublicKey,
   createdAt: z.iso.datetime(),
   revokedAt: z.iso.datetime().nullable(),
+  /** The device that vouched for this one, or null for the first device or a recovery. */
+  approvedBy: z.uuid().nullable(),
   current: z.boolean(),
 });
 
@@ -75,3 +117,7 @@ export type Device = z.infer<typeof Device>;
 export type MeResponse = z.infer<typeof MeResponse>;
 export type CreateInviteRequest = z.infer<typeof CreateInviteRequest>;
 export type CreateInviteResponse = z.infer<typeof CreateInviteResponse>;
+export type LinkRequest = z.infer<typeof LinkRequest>;
+export type LinkRequestResponse = z.infer<typeof LinkRequestResponse>;
+export type PendingLink = z.infer<typeof PendingLink>;
+export type RecoverRequest = z.infer<typeof RecoverRequest>;
