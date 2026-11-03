@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: silo
+          POSTGRES_PASSWORD: silo
+          POSTGRES_DB: silo_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U silo"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      TEST_DATABASE_URL: postgres://silo:silo@localhost:5432/silo_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w @silo/protocol
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

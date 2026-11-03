@@ -1,0 +1,33 @@
+# Local development: runs Postgres and the Silo server on this machine.
+# The server is only published on 127.0.0.1, so nothing outside this computer can reach it.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: silo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-silo-dev-only}
+      POSTGRES_DB: silo
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U silo"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    environment:
+      DATABASE_URL: postgres://silo:${POSTGRES_PASSWORD:-silo-dev-only}@db:5432/silo
+      HOST: 0.0.0.0
+      PORT: 8443
+    ports:
+      - "127.0.0.1:8443:8443"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
