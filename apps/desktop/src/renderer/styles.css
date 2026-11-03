@@ -30,3 +30,11 @@ button:disabled { opacity: 0.6; cursor: default; }
 code { font-size: 12px; word-break: break-all; }
 ul.devices { list-style: none; padding: 0; margin: 8px 0 0; }
 ul.devices li { padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
+h2 { font-size: 16px; margin: 24px 0 4px; }
+ul.devices li { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+pre.recovery-key, pre.pairing-code { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 14px; white-space: pre-wrap; word-break: break-all; user-select: all; }
+pre.pairing-code { font-size: 28px; letter-spacing: 4px; text-align: center; }
+label.check { display: flex; gap: 8px; align-items: center; }
+label.check input { width: auto; }
+.confirm { border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 8px; }
+.tabs { flex-wrap: wrap; }

@@ -1,13 +1,25 @@
 /** The only API the renderer can call. It never exposes the device's secret key or session token. */
 export interface SiloBridge {
   deviceInfo(): Promise<DeviceInfo>;
-  signup(input: SignupInput): Promise<Result<AccountView>>;
+  signup(input: SignupInput): Promise<Result<{ account: AccountView; recoveryKey: string }>>;
   login(input: { serverUrl: string }): Promise<Result<AccountView>>;
   logout(): Promise<void>;
+  /** A new device asks to join an account; returns the code to type on an existing device. */
+  requestLink(input: { serverUrl: string; username: string; deviceName: string }): Promise<Result<LinkTicket>>;
+  /** Checks whether the waiting device was approved, and signs in if it was. */
+  checkLink(): Promise<Result<AccountView | null>>;
+  /** On a signed-in device: shows which device is waiting behind a pairing code. */
+  lookupLink(input: { pairingCode: string }): Promise<Result<PendingDevice>>;
+  /** Approves the device found by the last lookupLink call. */
+  approveLink(): Promise<Result<AccountView>>;
+  revokeDevice(input: { deviceId: string }): Promise<Result<AccountView>>;
+  recover(input: RecoverInput): Promise<Result<{ account: AccountView; recoveryKey: string }>>;
+  rotateRecoveryKey(): Promise<Result<{ recoveryKey: string }>>;
 }
 
 export interface DeviceInfo {
   publicKey: string;
+  fingerprint: string;
   /** False when the OS keychain is missing and the key could not be stored safely. */
   secureStorage: boolean;
 }
@@ -19,9 +31,29 @@ export interface SignupInput {
   deviceName: string;
 }
 
+export interface RecoverInput {
+  serverUrl: string;
+  username: string;
+  recoveryKey: string;
+  deviceName: string;
+}
+
+export interface LinkTicket {
+  pairingCode: string;
+  /** This device's fingerprint, to compare with what the approving device shows. */
+  fingerprint: string;
+  expiresAt: string;
+}
+
+export interface PendingDevice {
+  deviceName: string;
+  fingerprint: string;
+  expiresAt: string;
+}
+
 export interface AccountView {
   username: string;
-  devices: { id: string; name: string; current: boolean; revoked: boolean; createdAt: string }[];
+  devices: { id: string; name: string; current: boolean; revoked: boolean; createdAt: string; fingerprint: string }[];
 }
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -31,4 +63,11 @@ export const IPC = {
   signup: 'silo:signup',
   login: 'silo:login',
   logout: 'silo:logout',
+  requestLink: 'silo:request-link',
+  checkLink: 'silo:check-link',
+  lookupLink: 'silo:lookup-link',
+  approveLink: 'silo:approve-link',
+  revokeDevice: 'silo:revoke-device',
+  recover: 'silo:recover',
+  rotateRecoveryKey: 'silo:rotate-recovery-key',
 } as const;

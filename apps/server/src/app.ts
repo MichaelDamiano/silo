@@ -5,6 +5,7 @@ import type { Config } from './config.js';
 import type { Db } from './db.js';
 import { HttpError } from './errors.js';
 import { accountRoutes } from './routes/accounts.js';
+import { deviceRoutes } from './routes/devices.js';
 import { inviteRoutes } from './routes/invites.js';
 
 export async function buildApp(config: Config, db: Db, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
@@ -43,6 +44,7 @@ export async function buildApp(config: Config, db: Db, opts: { logger?: boolean 
 
   app.get('/healthz', async () => ({ ok: true }));
   await app.register(accountRoutes, { db, config });
+  await app.register(deviceRoutes, { db, config });
   await app.register(inviteRoutes, { db });
   return app;
 }

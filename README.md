@@ -2,7 +2,7 @@
 
 An invite-only, end-to-end encrypted messaging app with servers, channels and direct messages, built to keep working when the main server is blocked or down.
 
-> Status: early prototype. Accounts, invites and per-device keys work. Messaging is next.
+> Status: early prototype. Accounts, invites, per-device keys, device approval and recovery keys work. Messaging is next.
 
 ## How accounts work
 
@@ -10,6 +10,8 @@ An invite-only, end-to-end encrypted messaging app with servers, channels and di
 - Each device creates its own Ed25519 key on first run and keeps the secret key encrypted by the OS keychain (Keychain on macOS, DPAPI on Windows, libsecret on Linux). If no keychain is available, the app refuses to store the key rather than saving it in plain text.
 - To sign in, the device signs a one-time challenge from the server. There is no password to phish or reuse.
 - You can see every device on your account and revoke one, which ends its sessions immediately.
+- To add another device, it shows a pairing code and its key fingerprint. You enter the code on a device that's already signed in, check that the fingerprints match, and approve. The approving device signs the new key, and the server keeps that signature.
+- At sign-up you get a recovery key to write down. It is a separate key that is never stored on the device. If you lose every device, it signs you in on a new one, revokes all the old ones and is replaced with a fresh key.
 - The server stores session tokens and invite codes only as SHA-256 hashes, and does not log IP addresses.
 
 ## Layout

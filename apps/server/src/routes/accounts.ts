@@ -17,7 +17,19 @@ import { HttpError, authFailed } from '../errors.js';
 import { createSession, requireAuth } from '../auth.js';
 import { hashSecret, randomSecret } from '../secrets.js';
 
-const isUniqueViolation = (err: unknown, constraint: string) =>
+/** Marks a challenge used and returns its nonce. Each challenge works once, for one key. */
+export async function consumeChallengeIn(db: Db, challengeId: string, publicKey: string): Promise<string> {
+  const { rows } = await db.query<{ nonce: string }>(
+    `UPDATE challenges SET used_at = now()
+      WHERE id = $1 AND public_key = $2 AND used_at IS NULL AND expires_at > now()
+      RETURNING nonce`,
+    [challengeId, publicKey],
+  );
+  if (!rows[0]) throw authFailed();
+  return rows[0].nonce;
+}
+
+export const isUniqueViolation = (err: unknown, constraint: string) =>
   typeof err === 'object' && err !== null && (err as { code?: string; constraint?: string }).code === '23505' &&
   (err as { constraint?: string }).constraint === constraint;
 
@@ -25,17 +37,7 @@ export async function accountRoutes(app: FastifyInstance, opts: { db: Db; config
   const { db, config } = opts;
   const authRateLimit = { rateLimit: { max: config.authRateLimitPerMinute, timeWindow: '1 minute' } };
 
-  /** Marks a challenge used and returns its nonce. Each challenge works once, for one key. */
-  async function consumeChallenge(challengeId: string, publicKey: string): Promise<string> {
-    const { rows } = await db.query<{ nonce: string }>(
-      `UPDATE challenges SET used_at = now()
-        WHERE id = $1 AND public_key = $2 AND used_at IS NULL AND expires_at > now()
-        RETURNING nonce`,
-      [challengeId, publicKey],
-    );
-    if (!rows[0]) throw authFailed();
-    return rows[0].nonce;
-  }
+  const consumeChallenge = (challengeId: string, publicKey: string) => consumeChallengeIn(db, challengeId, publicKey);
 
   app.post('/v1/auth/challenge', { config: authRateLimit }, async (request): Promise<ChallengeResponse> => {
     const { devicePublicKey } = ChallengeRequest.parse(request.body);
@@ -51,7 +53,9 @@ export async function accountRoutes(app: FastifyInstance, opts: { db: Db; config
   app.post('/v1/accounts', { config: authRateLimit }, async (request, reply): Promise<SessionResponse> => {
     const body = SignupRequest.parse(request.body);
     const nonce = await consumeChallenge(body.challengeId, body.devicePublicKey);
-    if (!verify(body.signature, signupPayload(nonce, body.username), body.devicePublicKey)) throw authFailed();
+    if (!verify(body.signature, signupPayload(nonce, body.username, body.recoveryPublicKey), body.devicePublicKey)) {
+      throw authFailed();
+    }
 
     const result = await withTransaction(db, async (client) => {
       const invite = await client.query(
@@ -64,12 +68,14 @@ export async function accountRoutes(app: FastifyInstance, opts: { db: Db; config
 
       let userId: string;
       try {
-        const user = await client.query<{ id: string }>('INSERT INTO users (username) VALUES ($1) RETURNING id', [
-          body.username,
-        ]);
+        const user = await client.query<{ id: string }>(
+          'INSERT INTO users (username, recovery_public_key) VALUES ($1, $2) RETURNING id',
+          [body.username, body.recoveryPublicKey],
+        );
         userId = user.rows[0]!.id;
       } catch (err) {
         if (isUniqueViolation(err, 'users_username_key')) throw new HttpError(409, 'username is taken');
+        if (isUniqueViolation(err, 'users_recovery_public_key_key')) throw new HttpError(409, 'recovery key is already in use');
         throw err;
       }
 
@@ -121,8 +127,15 @@ export async function accountRoutes(app: FastifyInstance, opts: { db: Db; config
   app.get('/v1/me', { preHandler: requireAuth(db) }, async (request): Promise<MeResponse> => {
     const { userId, deviceId } = request.auth!;
     const user = await db.query<{ username: string }>('SELECT username FROM users WHERE id = $1', [userId]);
-    const devices = await db.query<{ id: string; name: string; public_key: string; created_at: Date; revoked_at: Date | null }>(
-      'SELECT id, name, public_key, created_at, revoked_at FROM devices WHERE user_id = $1 ORDER BY created_at',
+    const devices = await db.query<{
+      id: string;
+      name: string;
+      public_key: string;
+      created_at: Date;
+      revoked_at: Date | null;
+      approved_by: string | null;
+    }>(
+      'SELECT id, name, public_key, created_at, revoked_at, approved_by FROM devices WHERE user_id = $1 ORDER BY created_at',
       [userId],
     );
     return {
@@ -134,6 +147,7 @@ export async function accountRoutes(app: FastifyInstance, opts: { db: Db; config
         publicKey: d.public_key,
         createdAt: d.created_at.toISOString(),
         revokedAt: d.revoked_at?.toISOString() ?? null,
+        approvedBy: d.approved_by,
         current: d.id === deviceId,
       })),
     };
