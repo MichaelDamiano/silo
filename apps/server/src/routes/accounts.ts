@@ -121,6 +121,7 @@ export async function accountRoutes(app: FastifyInstance, opts: { db: Db; config
 
   app.post('/v1/auth/logout', { preHandler: requireAuth(db) }, async (request, reply) => {
     await db.query('UPDATE sessions SET revoked_at = now() WHERE id = $1', [request.auth!.sessionId]);
+    app.live.disconnect([request.auth!.deviceId]);
     reply.code(204);
   });
 
@@ -166,6 +167,7 @@ export async function accountRoutes(app: FastifyInstance, opts: { db: Db; config
       if (res.rowCount === 0) throw new HttpError(404, 'device not found');
       await client.query('UPDATE sessions SET revoked_at = now() WHERE device_id = $1 AND revoked_at IS NULL', [id]);
     });
+    app.live.disconnect([id]);
     reply.code(204);
   });
 }

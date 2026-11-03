@@ -23,6 +23,15 @@ import {
 import { z } from 'zod';
 import type { AccountView, LinkTicket, PendingDevice, RecoverInput, SignupInput } from '../shared/ipc.js';
 import { runSpaceAction } from './spaces.js';
+import { HttpStatusError, Messenger } from './messenger.js';
+import type { Vault } from './vault.js';
+import type { AppEvent, Conversation, ConversationSummary } from '../shared/ipc.js';
+
+const DmActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('list') }),
+  z.object({ kind: z.literal('get'), peerUserId: z.uuid(), peerUsername: z.string().max(32).optional() }),
+  z.object({ kind: z.literal('send'), peerUserId: z.uuid(), peerUsername: z.string().max(32), text: z.string().max(4000) }),
+]);
 
 /** Plain http is only allowed to this machine, for local development. */
 export function normalizeServerUrl(input: string): string {
@@ -44,7 +53,7 @@ async function call<T>(base: string, path: string, init: RequestInit, parse: (v:
   const body = res.status === 204 ? undefined : await res.json().catch(() => undefined);
   if (!res.ok) {
     const message = (body as { error?: string } | undefined)?.error ?? `request failed (${res.status})`;
-    throw new Error(message);
+    throw new HttpStatusError(res.status, body, message);
   }
   return parse(body);
 }
@@ -52,11 +61,46 @@ async function call<T>(base: string, path: string, init: RequestInit, parse: (v:
 const none = () => undefined;
 
 export class SiloClient {
-  private session?: { base: string; token: string; userId: string };
+  private session?: { base: string; token: string; userId: string; deviceId: string };
   private waitingLink?: { base: string };
   private lookedUp?: PendingLink;
+  private messenger?: Messenger;
 
-  constructor(private readonly key: DeviceKeyPair) {}
+  constructor(
+    private readonly key: DeviceKeyPair,
+    private readonly vault?: Vault,
+    private readonly emit: (event: AppEvent) => void = () => undefined,
+  ) {}
+
+  /** Starts encrypted messaging once signed in. Failures are reported but don't block sign-in. */
+  private async startMessenger() {
+    const s = this.session;
+    if (!s || !this.vault) return;
+    this.messenger?.stop();
+    try {
+      this.messenger = await Messenger.start(
+        this.vault,
+        {
+          ...s,
+          request: (method, path, body, parse) =>
+            this.authed(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, parse),
+          sign: (payload) => sign(payload, this.key.secretKey),
+        },
+        this.emit,
+      );
+    } catch (err) {
+      this.emit({ type: 'error', message: `Encrypted messaging couldn't start: ${(err as Error).message}` });
+    }
+  }
+
+  async dm(input: unknown): Promise<ConversationSummary[] | Conversation> {
+    const a = DmActionSchema.parse(input);
+    const m = this.messenger;
+    if (!m) throw new Error('Encrypted messaging isn’t running on this device.');
+    if (a.kind === 'list') return m.conversations();
+    if (a.kind === 'get') return m.conversation(a.peerUserId, a.peerUsername);
+    return m.send(a.peerUserId, a.peerUsername, a.text);
+  }
 
   get publicKey() {
     return toBase64Url(this.key.publicKey);
@@ -72,7 +116,7 @@ export class SiloClient {
     );
   }
 
-  private authed<T>(path: string, init: RequestInit, parse: (v: unknown) => T): Promise<T> {
+  private authed<T>(path: string, init: RequestInit & { method?: string }, parse: (v: unknown) => T): Promise<T> {
     const s = this.session;
     if (!s) throw new Error('Not signed in.');
     return call(s.base, path, { ...init, headers: { ...init.headers, authorization: `Bearer ${s.token}` } }, parse);
@@ -106,7 +150,8 @@ export class SiloClient {
       },
       (v) => SessionResponse.parse(v),
     );
-    this.session = { base, token: session.token, userId: session.userId };
+    this.session = { base, token: session.token, userId: session.userId, deviceId: session.deviceId };
+    await this.startMessenger();
     return { account: await this.me(), recoveryKey: formatRecoveryKey(recovery.secretKey) };
   }
 
@@ -126,11 +171,14 @@ export class SiloClient {
       },
       (v) => SessionResponse.parse(v),
     );
-    this.session = { base, token: session.token, userId: session.userId };
+    this.session = { base, token: session.token, userId: session.userId, deviceId: session.deviceId };
+    await this.startMessenger();
     return this.me();
   }
 
   async logout(): Promise<void> {
+    this.messenger?.stop();
+    this.messenger = undefined;
     if (this.session) await this.post('/v1/auth/logout', {}).catch(none);
     this.session = undefined;
     this.lookedUp = undefined;
@@ -198,6 +246,8 @@ export class SiloClient {
     const me = await this.me().catch(() => undefined);
     if (!me) {
       // We revoked this very device, so its session is gone too.
+      this.messenger?.stop();
+      this.messenger = undefined;
       this.session = undefined;
       throw new Error('This device was revoked and signed out.');
     }
@@ -227,7 +277,8 @@ export class SiloClient {
       },
       (v) => SessionResponse.parse(v),
     );
-    this.session = { base, token: session.token, userId: session.userId };
+    this.session = { base, token: session.token, userId: session.userId, deviceId: session.deviceId };
+    await this.startMessenger();
     // The old recovery key has now been typed in, so replace it straight away.
     const { recoveryKey } = await this.rotateRecoveryKey();
     return { account: await this.me(), recoveryKey };

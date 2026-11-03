@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { AccountView, DeviceInfo, LinkTicket, PendingDevice, Result, SpaceSummary } from '../shared/ipc';
+import type { AccountView, ConversationSummary, DeviceInfo, LinkTicket, PendingDevice, Result, SpaceSummary } from '../shared/ipc';
+import { DmPage } from './Dms';
 import { NewSpace, Sidebar, SpacePage } from './Spaces';
 
 type Mode = 'signup' | 'login' | 'link' | 'recover';
@@ -217,7 +218,7 @@ function WaitingForApproval({ ticket, onApproved, onCancel }: { ticket: LinkTick
   );
 }
 
-type View = { kind: 'account' } | { kind: 'new' } | { kind: 'space'; id: string };
+type View = { kind: 'account' } | { kind: 'new' } | { kind: 'space'; id: string } | { kind: 'dm'; peerUserId: string; peerUsername: string };
 
 function Home(props: {
   account: AccountView;
@@ -227,6 +228,24 @@ function Home(props: {
 }) {
   const [spaces, setSpaces] = useState<SpaceSummary[]>([]);
   const [view, setView] = useState<View>({ kind: 'account' });
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [notice, setNotice] = useState<string>();
+
+  async function refreshDms() {
+    const r = await window.silo.dm({ kind: 'list' });
+    if (r.ok) setConversations(r.value);
+  }
+
+  useEffect(() => {
+    void refreshDms();
+    const off = window.silo.onEvent((e) => {
+      if (e.type === 'messages') void refreshDms();
+      else setNotice(e.message);
+    });
+    return () => {
+      off();
+    };
+  }, []);
 
   async function refresh(select?: View) {
     const result = await window.silo.space({ kind: 'list' });
@@ -250,9 +269,28 @@ function Home(props: {
         accountSelected={view.kind === 'account'}
         onSelect={(id) => setView(id === 'new' ? { kind: 'new' } : { kind: 'space', id })}
         onAccount={() => setView({ kind: 'account' })}
+        conversations={conversations}
+        selectedDm={view.kind === 'dm' ? view.peerUserId : undefined}
+        onSelectDm={(c) => setView({ kind: 'dm', peerUserId: c.peerUserId, peerUsername: c.peerUsername })}
       />
       {view.kind === 'new' && <NewSpace onDone={(s) => void refresh({ kind: 'space', id: s.id })} />}
-      {view.kind === 'space' && <SpacePage key={view.id} spaceId={view.id} onGone={() => void refresh({ kind: 'new' })} />}
+      {view.kind === 'space' && (
+        <SpacePage
+          key={view.id}
+          spaceId={view.id}
+          myUsername={props.account.username}
+          onGone={() => void refresh({ kind: 'new' })}
+          onMessage={(peerUserId, peerUsername) => setView({ kind: 'dm', peerUserId, peerUsername })}
+        />
+      )}
+      {view.kind === 'dm' && (
+        <DmPage key={view.peerUserId} peerUserId={view.peerUserId} peerUsername={view.peerUsername} onSent={() => void refreshDms()} />
+      )}
+      {notice && (
+        <div className="toast" role="alert">
+          {notice} <button className="link" onClick={() => setNotice(undefined)}>Dismiss</button>
+        </div>
+      )}
       {view.kind === 'account' && (
         <div className="content">
           <AccountScreen {...props} />

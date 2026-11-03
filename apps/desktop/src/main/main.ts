@@ -4,6 +4,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { IPC, type RecoverInput, type Result, type SignupInput } from '../shared/ipc.js';
 import { SiloClient } from './api.js';
 import { loadOrCreateDeviceKey, type SecretBox } from './keystore.js';
+import { Vault } from './vault.js';
+import type { AppEvent } from '../shared/ipc.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const rendererIndex = path.join(here, '../renderer/index.html');
@@ -13,6 +15,11 @@ const rendererUrl = pathToFileURL(rendererIndex).href;
 app.enableSandbox();
 
 let client: SiloClient | undefined;
+let mainWindow: BrowserWindow | undefined;
+
+function emit(event: AppEvent) {
+  mainWindow?.webContents.send(IPC.event, event);
+}
 
 /** Only our own bundled page may call into the main process. */
 function trusted(event: IpcMainInvokeEvent): boolean {
@@ -35,7 +42,7 @@ function handle(channel: string, fn: (...args: any[]) => Promise<unknown>) {
 }
 
 async function createWindow() {
-  const win = new BrowserWindow({
+  const win = (mainWindow = new BrowserWindow({
     width: 1100,
     height: 720,
     title: 'Silo',
@@ -47,6 +54,9 @@ async function createWindow() {
       webSecurity: true,
       spellcheck: false,
     },
+  }));
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = undefined;
   });
   // The window only ever shows our bundled page: no navigation, no pop-ups.
   win.webContents.on('will-navigate', (e) => e.preventDefault());
@@ -72,7 +82,9 @@ app.whenReady().then(async () => {
   };
   let secureStorage = true;
   try {
-    client = new SiloClient(await loadOrCreateDeviceKey(keyFile, box));
+    const key = await loadOrCreateDeviceKey(keyFile, box);
+    const vault = await Vault.open(app.getPath('userData'), box);
+    client = new SiloClient(key, vault, emit);
   } catch {
     secureStorage = false;
   }
@@ -98,6 +110,7 @@ app.whenReady().then(async () => {
   handle(IPC.recover, (input: RecoverInput) => wrap(() => need().recover(input)));
   handle(IPC.rotateRecoveryKey, () => wrap(() => need().rotateRecoveryKey()));
   handle(IPC.createAccountInvite, () => wrap(() => need().createAccountInvite()));
+  handle(IPC.dm, (action: unknown) => wrap(() => need().dm(action)));
   handle(IPC.space, (action: unknown) => wrap(() => need().space(action)));
 
   await createWindow();

@@ -17,4 +17,11 @@ contextBridge.exposeInMainWorld('silo', {
   rotateRecoveryKey: invoke('silo:rotate-recovery-key'),
   space: invoke('silo:space'),
   createAccountInvite: invoke('silo:create-account-invite'),
+  dm: invoke('silo:dm'),
+  onEvent: (listener: (event: unknown) => void) => {
+    // Pass only the event data, never the IPC event object, to the page.
+    const handler = (_e: unknown, event: unknown) => listener(event);
+    ipcRenderer.on('silo:event', handler);
+    return () => ipcRenderer.removeListener('silo:event', handler);
+  },
 });

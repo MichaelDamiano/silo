@@ -17,11 +17,45 @@ export interface SiloBridge {
   rotateRecoveryKey(): Promise<Result<{ recoveryKey: string }>>;
   /** Creates a code that lets someone new sign up. */
   createAccountInvite(): Promise<Result<{ code: string; expiresAt: string; maxUses: number }>>;
+  /** Direct messages: list conversations, open one, or send. */
+  dm<A extends DmAction>(action: A): Promise<Result<DmResult<A>>>;
+  /** Subscribes to live updates such as new messages. Returns an unsubscribe function. */
+  onEvent(listener: (event: AppEvent) => void): () => void;
   /** Everything to do with servers goes through one call, validated in the main process. */
   space<A extends SpaceAction>(action: A): Promise<Result<SpaceResult<A>>>;
 }
 
 export type Role = 'owner' | 'admin' | 'member';
+
+export interface DmMessage {
+  id: string;
+  from: 'me' | 'them';
+  text: string;
+  sentAt: string;
+  /** Set when a message arrived but couldn't be read. */
+  error?: string;
+}
+
+export interface ConversationSummary {
+  peerUserId: string;
+  peerUsername: string;
+  last: DmMessage | null;
+}
+
+export interface Conversation {
+  peerUserId: string;
+  peerUsername: string;
+  messages: DmMessage[];
+}
+
+export type DmAction =
+  | { kind: 'list' }
+  | { kind: 'get'; peerUserId: string; peerUsername?: string }
+  | { kind: 'send'; peerUserId: string; peerUsername: string; text: string };
+
+export type DmResult<A extends DmAction> = A['kind'] extends 'list' ? ConversationSummary[] : Conversation;
+
+export type AppEvent = { type: 'messages'; peerUserId: string } | { type: 'error'; message: string };
 
 export interface SpaceSummary {
   id: string;
@@ -115,4 +149,6 @@ export const IPC = {
   rotateRecoveryKey: 'silo:rotate-recovery-key',
   space: 'silo:space',
   createAccountInvite: 'silo:create-account-invite',
+  dm: 'silo:dm',
+  event: 'silo:event',
 } as const;

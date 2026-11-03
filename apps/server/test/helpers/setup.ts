@@ -29,7 +29,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.query('TRUNCATE users, devices, invites, challenges, sessions, device_links, spaces CASCADE');
+  await db.query('TRUNCATE users, devices, invites, challenges, sessions, device_links, spaces, envelopes, one_time_prekeys CASCADE');
 });
 
 export const pub = (kp: DeviceKeyPair) => toBase64Url(kp.publicKey);
