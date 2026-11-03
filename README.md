@@ -2,4 +2,67 @@
 
 An invite-only, end-to-end encrypted messaging app with servers, channels and direct messages, built to keep working when the main server is blocked or down.
 
-Licensed under the GNU Affero General Public License v3.0. See [LICENSE](LICENSE).
+> Status: early prototype. Accounts, invites and per-device keys work. Messaging is next.
+
+## How accounts work
+
+- There is no email or phone number. You join with an invite code and pick a username.
+- Each device creates its own Ed25519 key on first run and keeps the secret key encrypted by the OS keychain (Keychain on macOS, DPAPI on Windows, libsecret on Linux). If no keychain is available, the app refuses to store the key rather than saving it in plain text.
+- To sign in, the device signs a one-time challenge from the server. There is no password to phish or reuse.
+- You can see every device on your account and revoke one, which ends its sessions immediately.
+- The server stores session tokens and invite codes only as SHA-256 hashes, and does not log IP addresses.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `packages/protocol` | Shared request schemas and signing helpers used by both sides |
+| `apps/server` | Node + Fastify API with Postgres |
+| `apps/desktop` | Electron + React desktop client |
+
+## Running it locally
+
+You need Node 22, plus Docker or a local Postgres 16.
+
+```sh
+npm install
+```
+
+**Option A: Docker runs Postgres and the server**
+
+```sh
+docker compose up --build
+# Create the first invite (nobody exists yet to make one in the app)
+docker compose exec server node apps/server/dist/cli/create-invite.js --uses 5 --hours 72
+```
+
+**Option B: your own Postgres**
+
+```sh
+export DATABASE_URL=postgres://silo:silo@localhost:5432/silo
+npm run build -w @silo/protocol
+npm run dev -w @silo/server
+npm run invite:create -w @silo/server -- --uses 5 --hours 72
+```
+
+Then start the desktop app and join with that code at `http://localhost:8443`:
+
+```sh
+npm run dev -w @silo/desktop
+```
+
+On Linux the desktop app needs a running keychain such as GNOME Keyring or KWallet.
+
+## Tests
+
+```sh
+# Server tests need a Postgres database they are allowed to wipe
+export TEST_DATABASE_URL=postgres://silo:silo@localhost:5432/silo_test
+npm run build -w @silo/protocol
+npm run typecheck
+npm test
+```
+
+## License
+
+GNU Affero General Public License v3.0. See [LICENSE](LICENSE).
