@@ -80,3 +80,6 @@ ol.messages { list-style: none; margin: 0; padding: 16px 24px; flex: 1; overflow
 button.link { border: 0; background: none; color: var(--accent); padding: 0 4px; font-size: 12px; cursor: pointer; }
 li.hint { font-size: 12px; padding: 4px 8px; }
 .toast { position: fixed; bottom: 16px; right: 16px; max-width: 360px; background: var(--panel); border: 1px solid var(--error); color: var(--error); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+details.advanced { margin-top: 16px; }
+details.advanced summary { cursor: pointer; color: var(--muted); }
+.connection .row > div { flex: 1; }

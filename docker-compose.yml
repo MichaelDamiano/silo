@@ -23,11 +23,31 @@ services:
       DATABASE_URL: postgres://silo:${POSTGRES_PASSWORD:-silo-dev-only}@db:5432/silo
       HOST: 0.0.0.0
       PORT: 8443
+      # Other addresses to publish, most preferred first (comma separated).
+      PUBLIC_URLS: ${PUBLIC_URLS:-}
+      # Publishes the onion address once the tor service has created it.
+      ONION_HOSTNAME_FILE: /onion/hostname
     ports:
       - "127.0.0.1:8443:8443"
+    volumes:
+      - onion-name:/onion:ro
     depends_on:
       db:
         condition: service_healthy
 
+  # Makes the server reachable as a Tor onion service, with no ports opened on this machine.
+  # Turn it on with: docker compose --profile tor up --build
+  tor:
+    profiles: ["tor"]
+    build: tools/tor
+    volumes:
+      - tor-keys:/var/lib/tor
+      - onion-name:/shared
+    depends_on:
+      - server
+
 volumes:
   db-data:
+  # The onion service's private keys. Back this up to keep the same onion address.
+  tor-keys:
+  onion-name:
