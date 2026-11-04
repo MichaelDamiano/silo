@@ -2,6 +2,8 @@ import * as S from '@signalapp/libsignal-client';
 import { signalIdentityPayload, type DeviceBundle, type UploadKeysRequest } from '@silo/protocol';
 import { verify as verifyEd25519 } from '@silo/protocol';
 
+export { formatSafetyNumber, safetyNumber } from './safety.js';
+
 /**
  * Everything one device needs to run the Signal protocol, kept as plain data so it
  * can be encrypted and written to disk. Record values are libsignal's own
@@ -176,6 +178,24 @@ export class SignalDevice {
 
   hasSession(userId: string, signalDeviceId: number): boolean {
     return `${userId}.${signalDeviceId}` in this.state.sessions;
+  }
+
+  /** The identity key we trust for each of these devices, or undefined where we've never talked to it. */
+  identityKeysOf(userId: string, signalDeviceIds: number[]): (string | undefined)[] {
+    return signalDeviceIds.map((n) => this.state.identities[`${userId}.${n}`]);
+  }
+
+  /**
+   * Forgets the keys and sessions we hold for a person, so the next message to or
+   * from them starts over with whatever keys the server hands out. Only for after
+   * the person has confirmed, outside Silo, that their key really changed.
+   */
+  forgetUser(userId: string): Promise<void> {
+    return this.run(async () => {
+      const prefix = `${userId}.`;
+      for (const k of Object.keys(this.state.identities)) if (k.startsWith(prefix)) delete this.state.identities[k];
+      for (const k of Object.keys(this.state.sessions)) if (k.startsWith(prefix)) delete this.state.sessions[k];
+    });
   }
 
   /** Encrypts one plaintext separately for each target device. */

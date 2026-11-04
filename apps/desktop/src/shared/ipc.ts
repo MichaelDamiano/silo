@@ -27,6 +27,8 @@ export interface SiloBridge {
   onEvent(listener: (event: AppEvent) => void): () => void;
   /** Everything to do with servers goes through one call, validated in the main process. */
   space<A extends SpaceAction>(action: A): Promise<Result<SpaceResult<A>>>;
+  /** Blocking, safety numbers, and reports to moderators. */
+  safety<A extends SafetyAction>(action: A): Promise<Result<SafetyResult<A>>>;
 }
 
 export type Role = 'owner' | 'admin' | 'member';
@@ -71,6 +73,10 @@ export interface ChannelMessageView {
   /** Set while a message is waiting for its key, or when it couldn't be read. */
   error?: string;
   note?: string;
+  /** The server's number for this message, used when reporting it. */
+  seq?: number;
+  /** From someone this account blocked; the app hides it unless asked. */
+  blocked?: boolean;
 }
 
 export interface ChannelView {
@@ -207,5 +213,68 @@ export const IPC = {
   dm: 'silo:dm',
   channel: 'silo:channel',
   connection: 'silo:connection',
+  safety: 'silo:safety',
   event: 'silo:event',
 } as const;
+
+export type ReportReason = 'spam' | 'scam' | 'harassment' | 'malware' | 'illegal' | 'other';
+
+export interface BlockedView {
+  userId: string;
+  username: string;
+  blockedAt: string;
+}
+
+export interface SafetyView {
+  peerUserId: string;
+  /** Sixty digits in groups of five, or null until keys are exchanged with every device on both sides. */
+  number: string | null;
+  /**
+   * verified: you compared the number with them and it hasn't changed since.
+   * changed: it no longer matches the number you verified, so a device or key was added or replaced.
+   */
+  status: 'verified' | 'unverified' | 'changed' | 'incomplete';
+  theirDevices: number;
+  myDevices: number;
+}
+
+export interface ReportView {
+  id: string;
+  channelId: string | null;
+  channelName: string | null;
+  messageSeq: number | null;
+  reporter: { userId: string; username: string } | null;
+  reported: { userId: string; username: string; isMember: boolean };
+  reason: ReportReason;
+  note: string;
+  excerpt: string;
+  status: 'open' | 'resolved' | 'dismissed';
+  createdAt: string;
+  /**
+   * The server can't read messages, so it can't vouch for the excerpt. This compares
+   * it with the copy this device decrypted itself.
+   */
+  localCopy: 'matches' | 'differs' | 'unavailable' | null;
+  localText?: string;
+}
+
+export type SafetyAction =
+  | { kind: 'blocks' }
+  | { kind: 'block'; userId: string }
+  | { kind: 'unblock'; userId: string }
+  | { kind: 'safetyNumber'; peerUserId: string }
+  | { kind: 'verify'; peerUserId: string; number: string }
+  | { kind: 'unverify'; peerUserId: string }
+  | { kind: 'acceptNewKeys'; peerUserId: string }
+  | { kind: 'reportMessage'; spaceId: string; channelId: string; messageId: string; reason: ReportReason; note: string }
+  | { kind: 'reportUser'; spaceId: string; userId: string; reason: ReportReason; note: string }
+  | { kind: 'reports'; spaceId: string; closed?: boolean }
+  | { kind: 'resolveReport'; spaceId: string; reportId: string; status: 'resolved' | 'dismissed' };
+
+export type SafetyResult<A extends SafetyAction> = A['kind'] extends 'blocks' | 'block' | 'unblock'
+  ? BlockedView[]
+  : A['kind'] extends 'safetyNumber' | 'verify' | 'unverify' | 'acceptNewKeys'
+    ? SafetyView
+    : A['kind'] extends 'reports' | 'resolveReport'
+      ? ReportView[]
+      : null;

@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChannelView } from '../shared/ipc';
+import { ReportForm } from './Safety';
 
 export function ChannelPage({ spaceId, channelId, name }: { spaceId: string; channelId: string; name: string }) {
   const [view, setView] = useState<ChannelView>();
   const [text, setText] = useState('');
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [reporting, setReporting] = useState<string>();
+  const [shown, setShown] = useState<Set<string>>(new Set());
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -48,15 +51,39 @@ export function ChannelPage({ spaceId, channelId, name }: { spaceId: string; cha
         <span className="muted">End-to-end encrypted. Only members of this server can read these.</span>
       </header>
       <ol className="messages" data-testid="messages">
-        {view?.messages.map((m) => (
-          <li key={m.id} className={`msg ${m.from}${m.error ? ' failed' : ''}`}>
-            <div className="msg-meta">
-              {m.from === 'me' ? 'You' : m.senderUsername} · {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </div>
-            <div className="msg-text">{m.error ?? m.text}</div>
-            {m.note && <div className="msg-note">{m.note}</div>}
-          </li>
-        ))}
+        {view?.messages.map((m) =>
+          m.blocked && !shown.has(m.id) ? (
+            <li key={m.id} className="msg them hidden-msg">
+              <span className="muted">Message from someone you blocked.</span>
+              <button className="link" onClick={() => setShown(new Set(shown).add(m.id))}>
+                Show
+              </button>
+            </li>
+          ) : (
+            <li key={m.id} className={`msg ${m.from}${m.error ? ' failed' : ''}`}>
+              <div className="msg-meta">
+                {m.from === 'me' ? 'You' : m.senderUsername} · {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {m.from === 'them' && m.seq && (
+                  <button className="link" onClick={() => setReporting(reporting === m.id ? undefined : m.id)} data-testid="report-message">
+                    Report
+                  </button>
+                )}
+              </div>
+              <div className="msg-text">{m.error ?? m.text}</div>
+              {m.note && <div className="msg-note">{m.note}</div>}
+              {reporting === m.id && (
+                <ReportForm
+                  what={`this message from ${m.senderUsername}`}
+                  send={async (reason, note) => {
+                    const r = await window.silo.safety({ kind: 'reportMessage', spaceId, channelId, messageId: m.id, reason, note });
+                    if (!r.ok) throw new Error(r.error);
+                  }}
+                  onDone={() => setReporting(undefined)}
+                />
+              )}
+            </li>
+          ),
+        )}
         {view && view.messages.length === 0 && <li className="muted">No messages yet. Start the conversation.</li>}
       </ol>
       <div ref={bottom} />

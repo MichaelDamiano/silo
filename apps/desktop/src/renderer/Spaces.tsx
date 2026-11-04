@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ChannelPage } from './Channel';
+import { ReportForm, ReportsPanel } from './Safety';
 import type { ConversationSummary, Role, SpaceAction, SpaceResult, SpaceSummary, SpaceView } from '../shared/ipc';
 
 /** Mirrors the server's rule: owners manage everyone but owners, admins manage members. */
@@ -136,8 +137,11 @@ export function SpacePage({
   const [invite, setInvite] = useState<{ code: string; expiresAt: string; maxUses: number }>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [showReports, setShowReports] = useState(false);
+  const [reportingUser, setReportingUser] = useState<string>();
 
   useEffect(() => {
+    setShowReports(false);
     setSpace(undefined);
     setInvite(undefined);
     setChannelId(undefined);
@@ -206,7 +210,15 @@ export function SpacePage({
 
       <div className="content channel-content">
         {error && <div className="error">{error}</div>}
-        {channel && <ChannelPage key={channel.id} spaceId={spaceId} channelId={channel.id} name={channel.name} />}
+        {showReports ? (
+          <ReportsPanel
+            spaceId={spaceId}
+            onBan={async (userId) => setSpace(await act({ kind: 'ban', spaceId, userId }))}
+            onClose={() => setShowReports(false)}
+          />
+        ) : (
+          channel && <ChannelPage key={channel.id} spaceId={spaceId} channelId={channel.id} name={channel.name} />
+        )}
       </div>
 
       <section className="members" aria-label="Members">
@@ -217,11 +229,26 @@ export function SpacePage({
               <div>
                 {m.username} {m.role !== 'member' && <span className="badge">{m.role}</span>}
                 {m.username !== myUsername && (
-                  <button className="link" onClick={() => onMessage(m.userId, m.username)}>
-                    Message
-                  </button>
+                  <>
+                    <button className="link" onClick={() => onMessage(m.userId, m.username)}>
+                      Message
+                    </button>
+                    <button className="link" onClick={() => setReportingUser(reportingUser === m.userId ? undefined : m.userId)}>
+                      Report
+                    </button>
+                  </>
                 )}
               </div>
+              {reportingUser === m.userId && (
+                <ReportForm
+                  what={m.username}
+                  send={async (reason, note) => {
+                    const r = await window.silo.safety({ kind: 'reportUser', spaceId, userId: m.userId, reason, note });
+                    if (!r.ok) throw new Error(r.error);
+                  }}
+                  onDone={() => setReportingUser(undefined)}
+                />
+              )}
               {canManage(space.role, m.role) && (
                 <div className="member-actions">
                   {space.role === 'owner' && (
@@ -268,6 +295,14 @@ export function SpacePage({
               ))}
             </ul>
           </>
+        )}
+
+        {manager && (
+          <div className="row">
+            <button data-testid="open-reports" onClick={() => setShowReports(true)}>
+              Reports
+            </button>
+          </div>
         )}
 
         {manager && (

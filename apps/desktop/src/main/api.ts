@@ -24,6 +24,7 @@ import { z } from 'zod';
 import type { AccountView, LinkTicket, PendingDevice, RecoverInput, SignupInput } from '../shared/ipc.js';
 import { runSpaceAction } from './spaces.js';
 import { HttpStatusError, Messenger } from './messenger.js';
+import { Safety } from './safety.js';
 import type { Vault } from './vault.js';
 import { ServerDirectory, type KnownServer } from './servers.js';
 import { UnreachableError, type Transport } from './transport.js';
@@ -78,7 +79,9 @@ export class SiloClient {
   private dir?: Promise<ServerDirectory>;
   private readonly spaceCache = new Map<string, unknown>();
   private lookedUp?: PendingLink;
+  private checking?: Promise<AccountView | null>;
   private messenger?: Messenger;
+  private safetyCenter?: Safety;
 
   constructor(
     private readonly key: DeviceKeyPair,
@@ -105,6 +108,7 @@ export class SiloClient {
     this.spaceCache.clear();
     this.messenger?.stop();
     this.messenger = undefined;
+    this.safetyCenter = undefined;
     this.session?.net.close();
     this.session = undefined;
   }
@@ -133,6 +137,13 @@ export class SiloClient {
         },
         this.emit,
       );
+      // Blocks are loaded before the local network starts, so nothing from a blocked person slips in.
+      this.safetyCenter = await Safety.open(
+        s.userId,
+        this.vault,
+        (method, path, body, parse) => this.authed(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, parse),
+        () => this.messenger,
+      );
       if ((await this.directory()).lan) await this.messenger.setLan(true);
     } catch (err) {
       this.emit({ type: 'error', message: `Encrypted messaging couldn't start: ${(err as Error).message}` });
@@ -146,6 +157,11 @@ export class SiloClient {
     if (a.kind === 'list') return m.conversations();
     if (a.kind === 'get') return m.conversation(a.peerUserId, a.peerUsername);
     return m.send(a.peerUserId, a.peerUsername, a.text);
+  }
+
+  async safety(input: unknown): Promise<unknown> {
+    if (!this.safetyCenter) throw new Error('Sign in first.');
+    return this.safetyCenter.run(input);
   }
 
   /** Connection settings: which address is in use, the server's addresses, and Tor. */
@@ -301,7 +317,16 @@ export class SiloClient {
     return { pairingCode: `${code.slice(0, 5)}-${code.slice(5)}`, fingerprint: this.fingerprint, expiresAt: res.expiresAt };
   }
 
-  async checkLink(): Promise<AccountView | null> {
+  /** The renderer polls this; a poll that lands while the previous one is still signing in shares its result. */
+  checkLink(): Promise<AccountView | null> {
+    if (this.checking) return this.checking;
+    const p = (this.checking = this.checkLinkOnce().finally(() => {
+      if (this.checking === p) this.checking = undefined;
+    }));
+    return p;
+  }
+
+  private async checkLinkOnce(): Promise<AccountView | null> {
     const waiting = this.waitingLink;
     if (!waiting) throw new Error('This device is not waiting for approval.');
     const { approved } = await call(
@@ -312,7 +337,13 @@ export class SiloClient {
     );
     if (!approved) return null;
     this.waitingLink = undefined;
-    return this.loginWith(waiting.net, waiting.server);
+    try {
+      return await this.loginWith(waiting.net, waiting.server);
+    } catch (err) {
+      // Let the next poll try signing in again instead of forgetting the approval.
+      this.waitingLink = waiting;
+      throw err;
+    }
   }
 
   async lookupLink(pairingCode: string): Promise<PendingDevice> {

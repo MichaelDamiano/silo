@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Conversation } from '../shared/ipc';
+import { BlockButton, SafetyNumber } from './Safety';
 
 export function DmPage({ peerUserId, peerUsername, onSent }: { peerUserId: string; peerUsername?: string; onSent: () => void }) {
   const [conv, setConv] = useState<Conversation>();
@@ -40,11 +41,23 @@ export function DmPage({ peerUserId, peerUsername, onSent }: { peerUserId: strin
     } else setError(r.error);
   }
 
+  // The newest message tells us whether the last thing they sent was blocked for a changed key.
+  const lastFromThem = conv?.messages.filter((m) => m.from === 'them').at(-1);
+  const keyChanged = !!lastFromThem?.error?.includes('encryption key changed');
+
   return (
     <section className="chat" aria-label={`Messages with ${conv?.peerUsername ?? ''}`}>
       <header className="chat-header">
         <h1>{conv?.peerUsername ?? peerUsername ?? '…'}</h1>
         <span className="muted">End-to-end encrypted. Only you and {conv?.peerUsername ?? 'them'} can read these.</span>
+        <div className="chat-tools">
+          <SafetyNumber
+            peerUserId={peerUserId}
+            peerUsername={conv?.peerUsername ?? peerUsername ?? 'them'}
+            keyChanged={keyChanged}
+          />
+          <BlockButton userId={peerUserId} username={conv?.peerUsername ?? peerUsername ?? 'them'} />
+        </div>
       </header>
       <ol className="messages" data-testid="messages">
         {conv?.messages.map((m) => (
