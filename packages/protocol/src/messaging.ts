@@ -116,7 +116,9 @@ export const ChannelMessagePayload = z.object({
 
 /** Every member device of a space that can receive encrypted messages, except the caller's. */
 export const SpaceDevicesResponse = z.object({
-  devices: z.array(z.object({ userId: z.uuid(), deviceId: z.uuid(), signalDeviceId: z.number().int() })),
+  devices: z.array(
+    z.object({ userId: z.uuid(), username: z.string(), deviceId: z.uuid(), signalDeviceId: z.number().int(), publicKey: Ed25519PublicKey }),
+  ),
 });
 
 /** Pairwise copies of a sender key, for any member devices that don't have it yet. */

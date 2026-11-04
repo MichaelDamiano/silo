@@ -111,12 +111,13 @@ export async function messagingRoutes(app: FastifyInstance, opts: { db: Db }) {
     const { userId: target } = z.object({ userId: z.uuid() }).parse(request.params);
     const me = request.auth!;
     if (!(await canMessage(db, me.userId, target))) throw new HttpError(404, 'user not found');
-    const { rows } = await db.query<{ id: string; signal_device_id: number }>(
-      `SELECT id, signal_device_id FROM devices
+    const { rows } = await db.query<{ id: string; signal_device_id: number; public_key: string }>(
+      `SELECT id, signal_device_id, public_key FROM devices
         WHERE user_id = $1 AND revoked_at IS NULL AND signal_identity_key IS NOT NULL AND id <> $2 ORDER BY signal_device_id`,
       [target, me.deviceId],
     );
-    return { devices: rows.map((r) => ({ deviceId: r.id, signalDeviceId: r.signal_device_id })) };
+    // The login key lets devices recognise each other on a local network when the server is out of reach.
+    return { devices: rows.map((r) => ({ deviceId: r.id, signalDeviceId: r.signal_device_id, publicKey: r.public_key })) };
   });
 
   /**

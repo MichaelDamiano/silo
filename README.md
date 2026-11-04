@@ -2,7 +2,7 @@
 
 An invite-only, end-to-end encrypted messaging app with servers, channels and direct messages, built to keep working when the main server is blocked or down.
 
-> Status: early prototype. Accounts, devices, recovery keys, servers, roles, moderation, and end-to-end encrypted direct messages and channel messages work. Fallback addresses, relays and Tor onion access work. Connecting over the local network (LAN) is next.
+> Status: early prototype. Accounts, devices, recovery keys, servers, roles, moderation, and end-to-end encrypted direct messages and channel messages work. Fallback addresses, relays, Tor onion access and local-network delivery work. Hardening and an outside review are next.
 
 ## How accounts work
 
@@ -46,6 +46,14 @@ An invite-only, end-to-end encrypted messaging app with servers, channels and di
 - You can add an address by hand, for example an onion address a friend sends you when the main one is blocked. It's only added if the same server answers there.
 - Onion addresses go through Tor's SOCKS proxy (the Tor service on port 9050, or Tor Browser on 9150). You can also send all traffic through Tor so the server never sees your IP address.
 - A request that might already have reached the server is only retried on another address if it's safe to repeat, so a flaky connection doesn't send things twice.
+
+### When the server can't be reached at all
+
+- Turn on **local network** in Connection settings and the app looks for other Silo devices on the same Wi-Fi or LAN. It's off by default.
+- The announcement only says that a Silo device is listening on a port, not whose it is. Devices then link up only if each knows the other's login key from a server they share, which they remember while online.
+- Each link uses a fresh X25519 key exchange, signed by both devices' login keys, and AES-256-GCM in both directions. What travels over it is the same end-to-end encrypted Signal messages the server would carry.
+- If the server is unreachable, DMs and channel messages go straight to the people linked on your network, marked as sent locally. When the server is back they're sent through it as well, so everyone else gets them. Nobody sees them twice.
+- For now this only works while the app is already running and signed in when the server goes down. It also needs an earlier conversation with that person (an existing Signal session).
 
 ### Running a Tor onion service
 

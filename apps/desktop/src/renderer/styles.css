@@ -83,3 +83,4 @@ li.hint { font-size: 12px; padding: 4px 8px; }
 details.advanced { margin-top: 16px; }
 details.advanced summary { cursor: pointer; color: var(--muted); }
 .connection .row > div { flex: 1; }
+.msg-note { font-size: 11px; color: var(--muted); margin-top: 2px; }

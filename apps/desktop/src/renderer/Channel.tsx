@@ -54,6 +54,7 @@ export function ChannelPage({ spaceId, channelId, name }: { spaceId: string; cha
               {m.from === 'me' ? 'You' : m.senderUsername} · {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </div>
             <div className="msg-text">{m.error ?? m.text}</div>
+            {m.note && <div className="msg-note">{m.note}</div>}
           </li>
         ))}
         {view && view.messages.length === 0 && <li className="muted">No messages yet. Start the conversation.</li>}
