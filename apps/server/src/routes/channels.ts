@@ -26,8 +26,9 @@ export async function channelRoutes(app: FastifyInstance, opts: { db: Db }) {
 
   /** Active devices of all current members that can receive encrypted messages. */
   async function memberDevices(spaceId: string, exceptDevice?: string) {
-    const { rows } = await db.query<{ user_id: string; id: string; signal_device_id: number }>(
-      `SELECT d.user_id, d.id, d.signal_device_id FROM space_members m JOIN devices d ON d.user_id = m.user_id
+    const { rows } = await db.query<{ user_id: string; username: string; id: string; signal_device_id: number; public_key: string }>(
+      `SELECT d.user_id, u.username, d.id, d.signal_device_id, d.public_key
+         FROM space_members m JOIN devices d ON d.user_id = m.user_id JOIN users u ON u.id = m.user_id
         WHERE m.space_id = $1 AND d.revoked_at IS NULL AND d.signal_identity_key IS NOT NULL
           AND ($2::uuid IS NULL OR d.id <> $2)
         ORDER BY d.user_id, d.signal_device_id`,
@@ -41,7 +42,15 @@ export async function channelRoutes(app: FastifyInstance, opts: { db: Db }) {
     const me = request.auth!;
     await requireMember(spaceId, me.userId);
     const rows = await memberDevices(spaceId, me.deviceId);
-    return { devices: rows.map((r) => ({ userId: r.user_id, deviceId: r.id, signalDeviceId: r.signal_device_id })) };
+    return {
+      devices: rows.map((r) => ({
+        userId: r.user_id,
+        username: r.username,
+        deviceId: r.id,
+        signalDeviceId: r.signal_device_id,
+        publicKey: r.public_key,
+      })),
+    };
   });
 
   /** Delivers pairwise copies of the caller's sender key to member devices. Unlike DMs, any subset is allowed. */

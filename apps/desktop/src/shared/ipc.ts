@@ -38,6 +38,8 @@ export interface DmMessage {
   sentAt: string;
   /** Set when a message arrived but couldn't be read. */
   error?: string;
+  /** Extra information, such as a message that so far only went over the local network. */
+  note?: string;
 }
 
 export interface ConversationSummary {
@@ -68,6 +70,7 @@ export interface ChannelMessageView {
   sentAt: string;
   /** Set while a message is waiting for its key, or when it couldn't be read. */
   error?: string;
+  note?: string;
 }
 
 export interface ChannelView {
@@ -91,17 +94,21 @@ export interface ConnectionView {
   /** Short fingerprint of the server's pinned identity key. */
   serverFingerprint: string | null;
   addresses: { endpoint: string; published: boolean; onion: boolean }[];
+  lan: { enabled: boolean; peers: string[] };
 }
 
 export type ConnectionAction =
   | { kind: 'get' }
   | ({ kind: 'setTor' } & TorSettings)
+  | { kind: 'setLan'; enabled: boolean }
   | { kind: 'addAddress'; address: string }
   | { kind: 'removeAddress'; address: string };
 
 export type AppEvent =
   | { type: 'messages'; peerUserId: string }
   | { type: 'connection'; endpoint: string; viaTor: boolean }
+  /** Who is linked on the local network right now. */
+  | { type: 'lan'; peers: string[] }
   | { type: 'channel'; channelId: string }
   | { type: 'error'; message: string };
 

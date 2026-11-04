@@ -26,7 +26,7 @@ import { runSpaceAction } from './spaces.js';
 import { HttpStatusError, Messenger } from './messenger.js';
 import type { Vault } from './vault.js';
 import { ServerDirectory, type KnownServer } from './servers.js';
-import type { Transport } from './transport.js';
+import { UnreachableError, type Transport } from './transport.js';
 import type { AppEvent, ChannelView, ConnectionView, Conversation, ConversationSummary } from '../shared/ipc.js';
 
 const DmActionSchema = z.discriminatedUnion('kind', [
@@ -43,6 +43,7 @@ const ConnectionActionSchema = z.discriminatedUnion('kind', [
     proxyPort: z.number().int().min(1).max(65535),
     always: z.boolean(),
   }),
+  z.object({ kind: z.literal('setLan'), enabled: z.boolean() }),
   z.object({ kind: z.literal('addAddress'), address: z.string().max(256) }),
   z.object({ kind: z.literal('removeAddress'), address: z.string().max(256) }),
 ]);
@@ -75,6 +76,7 @@ export class SiloClient {
   private session?: { net: Transport; server: KnownServer; token: string; userId: string; deviceId: string };
   private waitingLink?: { net: Transport; server: KnownServer };
   private dir?: Promise<ServerDirectory>;
+  private readonly spaceCache = new Map<string, unknown>();
   private lookedUp?: PendingLink;
   private messenger?: Messenger;
 
@@ -100,6 +102,7 @@ export class SiloClient {
   }
 
   private endSession() {
+    this.spaceCache.clear();
     this.messenger?.stop();
     this.messenger = undefined;
     this.session?.net.close();
@@ -130,6 +133,7 @@ export class SiloClient {
         },
         this.emit,
       );
+      if ((await this.directory()).lan) await this.messenger.setLan(true);
     } catch (err) {
       this.emit({ type: 'error', message: `Encrypted messaging couldn't start: ${(err as Error).message}` });
     }
@@ -154,6 +158,9 @@ export class SiloClient {
       await dir.setTor(tor);
       s?.net.setTor(tor);
       this.waitingLink?.net.setTor(tor);
+    } else if (a.kind === 'setLan') {
+      await dir.setLan(a.enabled);
+      await this.messenger?.setLan(a.enabled);
     } else if (a.kind === 'addAddress' || a.kind === 'removeAddress') {
       if (!s) throw new Error('Sign in first.');
       s.server =
@@ -171,6 +178,7 @@ export class SiloClient {
             onion: /\.onion$/.test(new URL(endpoint).hostname),
           }))
         : [],
+      lan: { enabled: dir.lan, peers: this.messenger?.lanPeers() ?? [] },
     };
   }
 
@@ -382,10 +390,24 @@ export class SiloClient {
     return this.post('/v1/invites', { maxUses: 1, expiresInHours: 72 }, (v) => CreateInviteResponse.parse(v));
   }
 
-  space(action: unknown): Promise<unknown> {
-    return runSpaceAction(action, (method, path, body, parse) =>
-      this.authed(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, parse),
-    );
+  /**
+   * Server actions. Reads are remembered, so the server list and channels still
+   * show (read-only) while the server is unreachable and messages go over the
+   * local network.
+   */
+  async space(action: unknown): Promise<unknown> {
+    const key = JSON.stringify(action);
+    const readOnly = typeof action === 'object' && action !== null && ['list', 'get'].includes((action as { kind?: string }).kind ?? '');
+    try {
+      const value = await runSpaceAction(action, (method, path, body, parse) =>
+        this.authed(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, parse),
+      );
+      if (readOnly) this.spaceCache.set(key, value);
+      return value;
+    } catch (err) {
+      if (readOnly && err instanceof UnreachableError && this.spaceCache.has(key)) return this.spaceCache.get(key);
+      throw err;
+    }
   }
 
   async me(): Promise<AccountView> {

@@ -16,6 +16,8 @@ export interface KnownServer {
 interface Saved {
   servers: KnownServer[];
   tor: TorSettings;
+  /** Whether to look for other Silo devices on the local network. Off unless turned on. */
+  lan: boolean;
 }
 
 export class ServerIdentityError extends Error {}
@@ -40,19 +42,28 @@ export function normalizeServerUrl(input: string): string {
  * steer this device to an address the server didn't publish.
  */
 export class ServerDirectory {
-  private saved: Saved = { servers: [], tor: DEFAULT_TOR };
+  private saved: Saved = { servers: [], tor: DEFAULT_TOR, lan: false };
 
   private constructor(private readonly vault?: Vault) {}
 
   static async open(vault?: Vault): Promise<ServerDirectory> {
     const d = new ServerDirectory(vault);
     const saved = await vault?.read<Saved>('servers');
-    if (saved) d.saved = { servers: saved.servers ?? [], tor: { ...DEFAULT_TOR, ...saved.tor } };
+    if (saved) d.saved = { servers: saved.servers ?? [], tor: { ...DEFAULT_TOR, ...saved.tor }, lan: saved.lan === true };
     return d;
   }
 
   get tor(): TorSettings {
     return this.saved.tor;
+  }
+
+  get lan(): boolean {
+    return this.saved.lan;
+  }
+
+  async setLan(enabled: boolean) {
+    this.saved.lan = enabled;
+    await this.save();
   }
 
   async setTor(tor: TorSettings) {
