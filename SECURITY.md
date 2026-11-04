@@ -26,6 +26,8 @@ The server stores and relays only ciphertext. It does see:
 - usernames and server membership
 - which device sent a message to which account or channel, and when
 - message sizes
+- whom each person has blocked
+- the text of reports, as the reporter chose to share it
 
 It doesn't log IP addresses. Reports that the server can see this metadata are known limits rather than vulnerabilities, unless it can see more than this list.
 
@@ -35,5 +37,11 @@ It doesn't log IP addresses. Reports that the server can see this metadata are k
 - Per-device Ed25519 login keys. There are no passwords, and session tokens and invite codes are stored only as hashes.
 - Per-account rate limits. Caps on sessions per device, unused invites, memberships and undelivered messages per device.
 - A server identity key, kept in a file outside the database. Clients pin it, and it signs the server's address list.
-- A sandboxed Electron renderer with a strict CSP and no Node access. Every IPC message is checked in the main process.
+- A sandboxed Electron renderer with a strict CSP and no Node access. It is served only from `app://silo/` and can't navigate, open windows or make network requests. Every IPC message is checked in the main process.
+- Release builds turn off Electron's RunAsNode, NODE_OPTIONS and inspect fuses, check asar integrity, and refuse debugger switches. Releases are reproducible and can be checked with `verify-release`.
+- Safety numbers over every device on both sides, and a warning when a verified one changes. Blocking, and reports to moderators that are checked against the moderator's own copy.
 - Base images and CI actions pinned by digest. CodeQL, `npm audit` and Dependabot run in CI.
+
+## For reviewers
+
+[docs/security-review.md](docs/security-review.md) covers the architecture, trust boundaries, cryptography, known limits and the areas we most want checked.
