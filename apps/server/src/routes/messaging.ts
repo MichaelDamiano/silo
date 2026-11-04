@@ -14,10 +14,9 @@ import { z } from 'zod';
 import { withTransaction, type Db } from '../db.js';
 import { HttpError, authFailed } from '../errors.js';
 import { requireAuth } from '../auth.js';
+import { BODY_LIMITS, perUserLimit, requireMailboxRoom } from '../limits.js';
 
 const ENVELOPE_TTL_DAYS = 30;
-const perSession = (req: { headers: { authorization?: string }; ip: string }) => req.headers.authorization ?? req.ip;
-const limit = (max: number, timeWindow: string) => ({ rateLimit: { max, timeWindow, keyGenerator: perSession } });
 
 /** People can message each other only if they share a server, which keeps strangers out of DMs. */
 async function canMessage(q: Db | pg.PoolClient, from: string, to: string): Promise<boolean> {
@@ -32,6 +31,7 @@ async function canMessage(q: Db | pg.PoolClient, from: string, to: string): Prom
 
 export async function messagingRoutes(app: FastifyInstance, opts: { db: Db }) {
   const { db } = opts;
+  const limit = perUserLimit(db);
   app.addHook('preHandler', requireAuth(db));
 
   /** Publishes this device's Signal keys. The identity key can be set once and never swapped. */
@@ -182,7 +182,7 @@ export async function messagingRoutes(app: FastifyInstance, opts: { db: Db }) {
    * sender's own other devices. If the list doesn't match, nothing is stored and
    * the sender is told which devices to add or drop.
    */
-  app.post('/v1/messages', { config: limit(120, '1 minute') }, async (request, reply) => {
+  app.post('/v1/messages', { config: limit(120, '1 minute'), bodyLimit: BODY_LIMITS.directMessage }, async (request, reply) => {
     const body = SendMessagesRequest.parse(request.body);
     const me = request.auth!;
     if (body.recipientUserId === me.userId) throw new HttpError(400, 'use your own user only through your other devices');
@@ -202,6 +202,7 @@ export async function messagingRoutes(app: FastifyInstance, opts: { db: Db }) {
     }
     if (!expected.rows.some((r) => r.user_id === body.recipientUserId)) throw new HttpError(409, "that person hasn't set up encryption on any device yet");
 
+    await requireMailboxRoom(db, [...got]);
     await db.query(
       `INSERT INTO envelopes (recipient_device, sender_user, sender_device, message_type, body)
        SELECT d, $1, $2, t, decode(b, 'base64') FROM unnest($3::uuid[], $4::smallint[], $5::text[]) AS m(d, t, b)`,

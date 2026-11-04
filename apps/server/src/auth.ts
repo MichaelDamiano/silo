@@ -3,6 +3,7 @@ import type pg from 'pg';
 import type { Db } from './db.js';
 import { authFailed } from './errors.js';
 import { hashSecret, randomSecret } from './secrets.js';
+import { LIMITS } from './limits.js';
 
 export interface AuthContext {
   userId: string;
@@ -28,6 +29,13 @@ export async function createSession(
     deviceId,
     expiresAt,
   ]);
+  // Keep only the newest few sessions per device, so signing in over and over can't pile them up.
+  await client.query(
+    `UPDATE sessions SET revoked_at = now()
+      WHERE device_id = $1 AND revoked_at IS NULL
+        AND id NOT IN (SELECT id FROM sessions WHERE device_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC, id DESC LIMIT $2)`,
+    [deviceId, LIMITS.sessionsPerDevice],
+  );
   return { token, expiresAt };
 }
 

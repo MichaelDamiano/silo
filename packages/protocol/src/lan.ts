@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { PublicKey, Signature } from './api.js';
-import { SignalMessageType } from './messaging.js';
+import { MAX_CIPHERTEXT, SignalMessageType } from './messaging.js';
 
 const b64 = z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/, 'must be base64');
 
@@ -28,9 +28,9 @@ export const LanProof = z.object({ signature: Signature });
 /** What travels over an established, encrypted link. Sender details come from the link, never the frame. */
 export const LanFrame = z.discriminatedUnion('t', [
   /** A pairwise Signal message for the receiving device. */
-  z.object({ t: z.literal('envelope'), type: SignalMessageType, body: b64.max(96 * 1024) }),
+  z.object({ t: z.literal('envelope'), type: SignalMessageType, body: b64.max(MAX_CIPHERTEXT) }),
   /** A channel message encrypted with the sender's sender key. */
-  z.object({ t: z.literal('channel'), spaceId: z.uuid(), channelId: z.uuid(), body: b64.max(96 * 1024) }),
+  z.object({ t: z.literal('channel'), spaceId: z.uuid(), channelId: z.uuid(), body: b64.max(MAX_CIPHERTEXT) }),
 ]);
 
 export type LanBeacon = z.infer<typeof LanBeacon>;

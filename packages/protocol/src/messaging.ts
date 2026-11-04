@@ -3,6 +3,8 @@ import { PublicKey as Ed25519PublicKey, Signature as Ed25519Signature } from './
 
 const b64 = z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/, 'must be base64');
 const keyId = z.number().int().min(0).max(0xffffff);
+/** Base64 ciphertext for one encrypted copy. A 4000-character message with session setup is well under this. */
+export const MAX_CIPHERTEXT = 24 * 1024;
 
 /** Signal keys are libsignal's own serialised form, sent as base64. */
 export const UploadKeysRequest = z.object({
@@ -43,7 +45,7 @@ export const SendMessagesRequest = z.object({
   /** The person the conversation is with. Copies also go to the sender's other devices. */
   recipientUserId: z.uuid(),
   messages: z
-    .array(z.object({ deviceId: z.uuid(), type: SignalMessageType, body: b64.max(96 * 1024) }))
+    .array(z.object({ deviceId: z.uuid(), type: SignalMessageType, body: b64.max(MAX_CIPHERTEXT) }))
     .min(1)
     .max(128),
 });
@@ -126,10 +128,10 @@ export const DistributeSenderKeyRequest = z.object({
   messages: z
     .array(z.object({ deviceId: z.uuid(), type: SignalMessageType, body: b64.max(8 * 1024) }))
     .min(1)
-    .max(500),
+    .max(200),
 });
 
-export const PostChannelMessageRequest = z.object({ body: b64.max(96 * 1024) });
+export const PostChannelMessageRequest = z.object({ body: b64.max(MAX_CIPHERTEXT) });
 
 export const ChannelMessage = z.object({
   /** Increases with every message on the server, so a device can ask for everything after the last one it saw. */

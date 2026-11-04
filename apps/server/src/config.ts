@@ -16,6 +16,8 @@ export interface Config {
   publicUrls: string[];
   /** Where Tor writes this server's onion hostname, so it can be published automatically. */
   onionHostnameFile?: string;
+  /** Where the server's identity secret key is kept. Without it the key stays in the database (fine for development). */
+  serverKeyFile?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -39,5 +41,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         return parsed.data;
       }),
     onionHostnameFile: env.ONION_HOSTNAME_FILE || undefined,
+    serverKeyFile: env.SERVER_KEY_FILE || undefined,
   };
 }

@@ -2,7 +2,7 @@
 # The server is only published on 127.0.0.1, so nothing outside this computer can reach it.
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
     environment:
       POSTGRES_USER: silo
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-silo-dev-only}
@@ -27,10 +27,18 @@ services:
       PUBLIC_URLS: ${PUBLIC_URLS:-}
       # Publishes the onion address once the tor service has created it.
       ONION_HOSTNAME_FILE: /onion/hostname
+      # Keeps the server's identity secret out of the database and its backups.
+      SERVER_KEY_FILE: /keys/server.key
     ports:
       - "127.0.0.1:8443:8443"
     volumes:
       - onion-name:/onion:ro
+      - server-keys:/keys
+    # The server needs no privileges and writes nothing but its key file.
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     depends_on:
       db:
         condition: service_healthy
@@ -43,6 +51,10 @@ services:
     volumes:
       - tor-keys:/var/lib/tor
       - onion-name:/shared
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     depends_on:
       - server
 
@@ -51,3 +63,5 @@ volumes:
   # The onion service's private keys. Back this up to keep the same onion address.
   tor-keys:
   onion-name:
+  # The server's identity key. Back it up: losing it means every client sees a new, untrusted server.
+  server-keys:

@@ -31,9 +31,16 @@ export async function buildApp(config: Config, db: Db, opts: { logger?: boolean 
   // Counters live in memory only and are keyed by IP just long enough to rate limit.
   await app.register(rateLimit, { global: true, max: 120, timeWindow: '1 minute' });
 
-  app.addHook('onSend', async (_request, reply) => {
+  app.addHook('onSend', async (request, reply) => {
     reply.header('cache-control', 'no-store');
     reply.header('x-content-type-options', 'nosniff');
+    // This is a JSON API: nothing it returns should ever be rendered, framed or sent onward as a referrer.
+    reply.header('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+    reply.header('x-frame-options', 'DENY');
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('cross-origin-resource-policy', 'same-origin');
+    reply.header('permissions-policy', 'camera=(), microphone=(), geolocation=(), interest-cohort=()');
+    if (request.protocol === 'https') reply.header('strict-transport-security', 'max-age=63072000; includeSubDomains');
   });
 
   app.setErrorHandler((err, request, reply) => {

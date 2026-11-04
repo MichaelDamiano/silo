@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { withTransaction, type Db } from '../db.js';
 import { HttpError } from '../errors.js';
 import { requireAuth } from '../auth.js';
+import { LIMITS, perUserLimit } from '../limits.js';
 import { hashSecret, randomSecret } from '../secrets.js';
 import { isUniqueViolation } from './accounts.js';
 
@@ -32,9 +33,6 @@ const forbidden = () => new HttpError(403, "you don't have permission to do that
 
 type Querier = Db | pg.PoolClient;
 
-/** Signed-in routes are limited per session, so people sharing an IP don't block each other. */
-const perSession = (req: { headers: { authorization?: string }; ip: string }) => req.headers.authorization ?? req.ip;
-const limit = (max: number, timeWindow: string) => ({ rateLimit: { max, timeWindow, keyGenerator: perSession } });
 
 /** The caller's role in a space, or 404 if they aren't a member. Pass lock to hold the row for the transaction. */
 async function roleIn(q: Querier, spaceId: string, userId: string, lock = false): Promise<Role> {
@@ -46,6 +44,11 @@ async function roleIn(q: Querier, spaceId: string, userId: string, lock = false)
   return rows[0].role;
 }
 
+async function requireRoomForAnotherSpace(q: Querier, userId: string) {
+  const { rows } = await q.query<{ n: number }>('SELECT count(*)::int AS n FROM space_members WHERE user_id = $1', [userId]);
+  if (rows[0]!.n >= LIMITS.spacesPerUser) throw new HttpError(429, `you can be in at most ${LIMITS.spacesPerUser} servers`);
+}
+
 async function requireManager(q: Querier, spaceId: string, userId: string): Promise<Role> {
   const role = await roleIn(q, spaceId, userId);
   if (!canManage(role)) throw forbidden();
@@ -54,6 +57,7 @@ async function requireManager(q: Querier, spaceId: string, userId: string): Prom
 
 export async function spaceRoutes(app: FastifyInstance, opts: { db: Db }) {
   const { db } = opts;
+  const limit = perUserLimit(db);
   app.addHook('preHandler', requireAuth(db));
   const uid = (req: { auth?: { userId: string } }) => req.auth!.userId;
 
@@ -67,6 +71,7 @@ export async function spaceRoutes(app: FastifyInstance, opts: { db: Db }) {
         [userId],
       );
       if ((owned.rows[0]?.n ?? 0) >= MAX_OWNED_SPACES) throw new HttpError(429, `you can own at most ${MAX_OWNED_SPACES} servers`);
+      await requireRoomForAnotherSpace(client, userId);
       const space = await client.query<{ id: string }>('INSERT INTO spaces (name) VALUES ($1) RETURNING id', [name]);
       const spaceId = space.rows[0]!.id;
       await client.query(`INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, 'owner')`, [spaceId, userId]);
@@ -198,6 +203,7 @@ export async function spaceRoutes(app: FastifyInstance, opts: { db: Db }) {
       if (!found) throw new HttpError(404, 'invite is invalid, used up or expired');
       const banned = await client.query('SELECT 1 FROM space_bans WHERE space_id = $1 AND user_id = $2', [found.space_id, userId]);
       if (banned.rows.length) throw new HttpError(403, "you can't join this server");
+      await requireRoomForAnotherSpace(client, userId);
       const joined = await client.query(
         `INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING`,
         [found.space_id, userId],

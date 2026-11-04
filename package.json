@@ -2,11 +2,22 @@
   "name": "silo",
   "private": true,
   "license": "AGPL-3.0-only",
-  "workspaces": ["packages/*", "apps/*"],
-  "engines": { "node": ">=22" },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
+  },
+  "overrides": {
+    "@signalapp/types": {
+      "zod": "^4.6.7",
+      "uuid": "^13.0.1"
+    }
   }
 }
