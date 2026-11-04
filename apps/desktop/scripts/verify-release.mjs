@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import asar from '@electron/asar';
+import * as asar from '@electron/asar';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const releaseDir = path.join(here, '..', 'release');

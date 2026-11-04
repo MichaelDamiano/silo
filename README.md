@@ -85,6 +85,13 @@ Then add the relay to the server's published list, for example `PUBLIC_URLS=http
 - The Compose services run read-only, as non-root, with all Linux capabilities dropped and `no-new-privileges`.
 - Put the server behind TLS (a reverse proxy or a relay in front of one) and set `PUBLIC_URLS` to the addresses you publish.
 
+## Desktop releases
+
+- `npm run dist -w @silo/desktop` builds an installer for the current platform into `apps/desktop/release`.
+- Release builds turn off the Electron features an attacker with local access could use to run their own code as Silo, refuse debugger switches, and serve the app only from `app://silo/`.
+- Builds are reproducible: anyone can rebuild a release and check it with `npm run verify-release -w @silo/desktop -- <download>`. See [docs/reproducible-builds.md](docs/reproducible-builds.md).
+- Pushing a `v*` tag builds Linux, macOS and Windows versions and attaches them, with checksums, to a draft GitHub release.
+
 ## Layout
 
 | Path | What it is |
