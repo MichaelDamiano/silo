@@ -1,0 +1,43 @@
+# Release packaging. See docs/reproducible-builds.md for how to check a release.
+appId: org.silo.desktop
+productName: Silo
+executableName: silo
+artifactName: "silo-${version}-${os}-${arch}.${ext}"
+copyright: Silo contributors, AGPL-3.0-only
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - "!dist/**/*.map"
+  - package.json
+asar: true
+# libsignal's native module has to sit outside the archive to be loaded.
+asarUnpack:
+  - "**/*.node"
+# The same build twice gives the same app.asar; no timestamps or build ids leak in.
+npmRebuild: false
+buildDependenciesFromSource: false
+nodeGypRebuild: false
+includePdb: false
+# Electron fuses switch off features an attacker with local access could use to
+# run their own code inside a signed Silo.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: false
+publish: null
+linux:
+  target: [AppImage, tar.gz]
+  category: Network
+mac:
+  target: [dmg, zip]
+  hardenedRuntime: true
+  category: public.app-category.social-networking
+win:
+  target: [nsis]

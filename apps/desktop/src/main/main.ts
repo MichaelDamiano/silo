@@ -1,6 +1,8 @@
-import { app, BrowserWindow, ipcMain, safeStorage, session, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, protocol, safeStorage, session, type IpcMainInvokeEvent } from 'electron';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { allowedRequest, APP_INDEX, APP_SCHEME, isAppPage, RENDERER_CSP, resolveAppFile } from './app-protocol.js';
 import { IPC, type RecoverInput, type Result, type SignupInput } from '../shared/ipc.js';
 import { SiloClient } from './api.js';
 import { loadOrCreateDeviceKey, type SecretBox } from './keystore.js';
@@ -8,11 +10,35 @@ import { Vault } from './vault.js';
 import type { AppEvent } from '../shared/ipc.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const rendererIndex = path.join(here, '../renderer/index.html');
-const rendererUrl = pathToFileURL(rendererIndex).href;
+const rendererDir = path.join(here, '../renderer');
+const dev = !app.isPackaged;
+
+// A release build refuses debugger switches, which would let anything that can start
+// Silo drive the signed-in app. The fuses already block Node's own --inspect flags.
+const DEBUG_SWITCHES = ['remote-debugging-port', 'remote-debugging-pipe', 'remote-allow-origins', 'inspect', 'inspect-brk', 'js-flags'];
+if (!dev && DEBUG_SWITCHES.some((s) => app.commandLine.hasSwitch(s))) {
+  console.error('Silo: debugging switches are disabled in release builds.');
+  app.exit(1);
+}
 
 // Harden before any window exists.
 app.enableSandbox();
+protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: { standard: true, secure: true } }]);
+
+// One copy at a time, so two processes never write the same vault and key files.
+if (!app.requestSingleInstanceLock()) app.exit(0);
+app.on('second-instance', () => {
+  if (mainWindow?.isMinimized()) mainWindow.restore();
+  mainWindow?.focus();
+});
+
+// Applies to every web page Electron creates, including any we didn't make ourselves.
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-navigate', (e) => e.preventDefault());
+  contents.on('will-redirect', (e) => e.preventDefault());
+  contents.on('will-attach-webview', (e) => e.preventDefault());
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+});
 
 let client: SiloClient | undefined;
 let mainWindow: BrowserWindow | undefined;
@@ -23,7 +49,7 @@ function emit(event: AppEvent) {
 
 /** Only our own bundled page may call into the main process. */
 function trusted(event: IpcMainInvokeEvent): boolean {
-  return event.senderFrame?.url === rendererUrl;
+  return isAppPage(event.senderFrame?.url) && event.senderFrame === mainWindow?.webContents.mainFrame;
 }
 
 async function wrap<T>(fn: () => Promise<T>): Promise<Result<T>> {
@@ -53,21 +79,50 @@ async function createWindow() {
       nodeIntegration: false,
       webSecurity: true,
       spellcheck: false,
+      devTools: dev,
+      webviewTag: false,
+      navigateOnDragDrop: false,
     },
   }));
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = undefined;
   });
-  // The window only ever shows our bundled page: no navigation, no pop-ups.
-  win.webContents.on('will-navigate', (e) => e.preventDefault());
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  await win.loadFile(rendererIndex);
+  await win.loadURL(APP_INDEX);
 }
 
 app.whenReady().then(async () => {
   // Deny camera, microphone, notifications, geolocation and every other permission by default.
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.setDevicePermissionHandler(() => false);
+  // The page talks to the network only through the main process, so it may load nothing but its own files.
+  session.defaultSession.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !allowedRequest(details.url, dev) }));
+  protocol.handle(APP_SCHEME, async (request) => {
+    const hit = resolveAppFile(rendererDir, request.url);
+    if (!hit || request.method !== 'GET') return new Response('not found', { status: 404 });
+    try {
+      return new Response(await readFile(hit.file), {
+        headers: {
+          'content-type': hit.type,
+          'content-security-policy': RENDERER_CSP,
+          'x-content-type-options': 'nosniff',
+          'cross-origin-opener-policy': 'same-origin',
+        },
+      });
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+  });
+  // No Reload or Toggle DevTools in release builds; keep the standard edit and window menus.
+  if (!dev) {
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate([
+        ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
+        { role: 'editMenu' },
+        { role: 'windowMenu' },
+      ]),
+    );
+  }
 
   const keyFile = path.join(app.getPath('userData'), 'device-key.bin');
   // Electron's Linux fallback backend "basic_text" is not a real keychain, so treat it as unavailable.
