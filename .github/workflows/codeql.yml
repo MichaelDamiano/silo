@@ -1,0 +1,43 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
+      # Code scanning results can only be uploaded to public repositories (or private
+      # ones with GitHub Code Security). Elsewhere we keep the results local and fail
+      # the job ourselves when CodeQL finds anything.
+      - uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          upload: ${{ github.event.repository.visibility == 'public' && 'always' || 'never' }}
+          output: sarif-results
+      - name: Fail on findings
+        run: |
+          count=$(jq '[.runs[].results[]] | length' sarif-results/*.sarif)
+          echo "CodeQL findings: $count"
+          if [ "$count" -gt 0 ]; then
+            jq -r '.runs[].results[] | "\(.ruleId): \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) \(.message.text)"' sarif-results/*.sarif
+            exit 1
+          fi

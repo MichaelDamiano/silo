@@ -532,8 +532,8 @@ export class Messenger {
       targets.push(...(await this.targetsFor(userId, need.filter((d) => d.userId === userId))));
     }
     const messages = await this.signal.encrypt(plaintext, targets);
-    for (let i = 0; i < messages.length; i += 500) {
-      await this.api.request('POST', `/v1/spaces/${spaceId}/sender-keys`, { messages: messages.slice(i, i + 500) }, () => null);
+    for (let i = 0; i < messages.length; i += 200) {
+      await this.api.request('POST', `/v1/spaces/${spaceId}/sender-keys`, { messages: messages.slice(i, i + 200) }, () => null);
     }
     out.sentTo.push(...need.map((d) => d.deviceId));
     await this.vault.write('channels', this.channels);

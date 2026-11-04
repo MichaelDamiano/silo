@@ -2,7 +2,7 @@
 
 An invite-only, end-to-end encrypted messaging app with servers, channels and direct messages, built to keep working when the main server is blocked or down.
 
-> Status: early prototype. Accounts, devices, recovery keys, servers, roles, moderation, and end-to-end encrypted direct messages and channel messages work. Fallback addresses, relays, Tor onion access and local-network delivery work. Hardening and an outside review are next.
+> Status: early prototype. Accounts, devices, recovery keys, servers, roles, moderation, and end-to-end encrypted direct messages and channel messages work. Fallback addresses, relays, Tor onion access and local-network delivery work. Hardening for an outside review is under way; see [SECURITY.md](SECURITY.md).
 
 ## How accounts work
 
@@ -72,6 +72,18 @@ LISTEN=0.0.0.0:443 UPSTREAM=silo.example.com:443 node tools/relay/relay.mjs
 ```
 
 Then add the relay to the server's published list, for example `PUBLIC_URLS=https://relay.example.net`. The server's TLS certificate must also cover the relay's hostname. Plain `http://` addresses are only allowed for localhost and onion services.
+
+## Limits against abuse
+
+- Signed-in requests are rate limited per account, not per session, so signing in again doesn't reset anything. People sharing an IP address (a household, an office, Tor) don't block each other.
+- Each device keeps at most 5 sessions, and older ones are signed out. Each person can have 10 unused sign-up codes and be in 200 servers.
+- A device with 5,000 undelivered messages stops accepting more until it catches up, so nobody can fill the server's disk by flooding one person.
+
+## Running it in production
+
+- Set `SERVER_KEY_FILE` so the server's identity secret lives in a file only the server can read, not in the database or its backups. Docker Compose does this with the `server-keys` volume. Back that volume up: if the key is lost, every client sees a new server it doesn't trust.
+- The Compose services run read-only, as non-root, with all Linux capabilities dropped and `no-new-privileges`.
+- Put the server behind TLS (a reverse proxy or a relay in front of one) and set `PUBLIC_URLS` to the addresses you publish.
 
 ## Layout
 

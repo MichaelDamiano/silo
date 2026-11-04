@@ -4,10 +4,9 @@ import { z } from 'zod';
 import type { Db } from '../db.js';
 import { HttpError } from '../errors.js';
 import { requireAuth } from '../auth.js';
+import { BODY_LIMITS, perUserLimit, requireMailboxRoom } from '../limits.js';
 
 const CHANNEL_MESSAGE_TTL_DAYS = 30;
-const perSession = (req: { headers: { authorization?: string }; ip: string }) => req.headers.authorization ?? req.ip;
-const limit = (max: number, timeWindow: string) => ({ rateLimit: { max, timeWindow, keyGenerator: perSession } });
 const notFound = () => new HttpError(404, 'server not found');
 
 /**
@@ -17,6 +16,7 @@ const notFound = () => new HttpError(404, 'server not found');
  */
 export async function channelRoutes(app: FastifyInstance, opts: { db: Db }) {
   const { db } = opts;
+  const limit = perUserLimit(db);
   app.addHook('preHandler', requireAuth(db));
 
   async function requireMember(spaceId: string, userId: string) {
@@ -54,7 +54,7 @@ export async function channelRoutes(app: FastifyInstance, opts: { db: Db }) {
   });
 
   /** Delivers pairwise copies of the caller's sender key to member devices. Unlike DMs, any subset is allowed. */
-  app.post('/v1/spaces/:spaceId/sender-keys', { config: limit(60, '1 minute') }, async (request, reply) => {
+  app.post('/v1/spaces/:spaceId/sender-keys', { config: limit(60, '1 minute'), bodyLimit: BODY_LIMITS.senderKeys }, async (request, reply) => {
     const { spaceId } = z.object({ spaceId: z.uuid() }).parse(request.params);
     const { messages } = DistributeSenderKeyRequest.parse(request.body);
     const me = request.auth!;
@@ -64,6 +64,7 @@ export async function channelRoutes(app: FastifyInstance, opts: { db: Db }) {
     if (extra.length || new Set(messages.map((m) => m.deviceId)).size !== messages.length) {
       return reply.code(409).send({ error: 'device list is out of date', missing: [], extra });
     }
+    await requireMailboxRoom(db, messages.map((m) => m.deviceId));
     await db.query(
       `INSERT INTO envelopes (recipient_device, sender_user, sender_device, message_type, body)
        SELECT d, $1, $2, t, decode(b, 'base64') FROM unnest($3::uuid[], $4::smallint[], $5::text[]) AS m(d, t, b)`,
@@ -74,7 +75,7 @@ export async function channelRoutes(app: FastifyInstance, opts: { db: Db }) {
     return { delivered: messages.length };
   });
 
-  app.post('/v1/channels/:channelId/messages', { config: limit(120, '1 minute') }, async (request, reply) => {
+  app.post('/v1/channels/:channelId/messages', { config: limit(120, '1 minute'), bodyLimit: BODY_LIMITS.channelMessage }, async (request, reply) => {
     const { channelId } = z.object({ channelId: z.uuid() }).parse(request.params);
     const { body } = PostChannelMessageRequest.parse(request.body);
     const me = request.auth!;
