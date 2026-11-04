@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { ChannelPage } from './Channel';
 import type { ConversationSummary, Role, SpaceAction, SpaceResult, SpaceSummary, SpaceView } from '../shared/ipc';
 
 /** Mirrors the server's rule: owners manage everyone but owners, admins manage members. */
@@ -203,11 +204,10 @@ export function SpacePage({
         )}
       </section>
 
-      <section className="content" aria-label="Messages">
-        <h1># {channel?.name}</h1>
-        <p className="muted">Channel messages arrive in the next update. Direct messages are already end-to-end encrypted: choose Message next to a member.</p>
+      <div className="content channel-content">
         {error && <div className="error">{error}</div>}
-      </section>
+        {channel && <ChannelPage key={channel.id} spaceId={spaceId} channelId={channel.id} name={channel.name} />}
+      </div>
 
       <section className="members" aria-label="Members">
         <div className="sidebar-title">Members ({space.members.length})</div>

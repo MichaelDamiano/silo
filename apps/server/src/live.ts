@@ -21,8 +21,9 @@ export class LiveHub {
     });
   }
 
-  notify(deviceIds: Iterable<string>) {
-    for (const id of deviceIds) for (const ws of this.sockets.get(id) ?? []) ws.send(JSON.stringify({ type: 'envelopes' }));
+  /** Nudges devices to fetch: 'envelopes' for pairwise messages, 'channel' for channel messages. */
+  notify(deviceIds: Iterable<string>, type: 'envelopes' | 'channel' = 'envelopes') {
+    for (const id of deviceIds) for (const ws of this.sockets.get(id) ?? []) ws.send(JSON.stringify({ type }));
   }
 
   /** Called when a device is revoked so it stops receiving nudges at once. */

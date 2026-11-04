@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { generateDeviceKeyPair, sign, toBase64Url, type DeviceBundle } from '@silo/protocol';
 import { randomUUID } from 'node:crypto';
-import { IdentityChangedError, MemoryStateStore, SignalDevice } from './index.js';
+import { IdentityChangedError, MemoryStateStore, MissingSenderKeyError, SignalDevice } from './index.js';
 
 const text = (s: string) => new TextEncoder().encode(s);
 const read = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -99,5 +99,65 @@ describe('SignalDevice', () => {
     const env = { senderUserId: 'alice-id', senderSignalDeviceId: 1, ...m! };
     await bob.dev.decrypt(env);
     await expect(bob.dev.decrypt(env)).rejects.toThrow();
+  });
+
+  describe('sender keys', () => {
+    it('lets every holder of the key read a channel message encrypted once', async () => {
+      const alice = await makeDevice('alice-id', 1);
+      const bob = await makeDevice('bob-id', 1);
+      const carol = await makeDevice('carol-id', 2);
+      const dist = randomUUID();
+      const skdm = await alice.dev.senderKeyDistribution(dist);
+      await bob.dev.processSenderKeyDistribution('alice-id', 1, skdm);
+      await carol.dev.processSenderKeyDistribution('alice-id', 1, skdm);
+
+      const body = await alice.dev.groupEncrypt(dist, text('hello channel'));
+      for (const d of [bob, carol]) {
+        const out = await d.dev.groupDecrypt('alice-id', 1, body);
+        expect(out.distributionId).toBe(dist);
+        expect(read(out.plaintext)).toBe('hello channel');
+      }
+    });
+
+    it('reports a missing key rather than failing, so the message can be retried', async () => {
+      const alice = await makeDevice('alice-id', 1);
+      const bob = await makeDevice('bob-id', 1);
+      const body = await alice.dev.groupEncrypt(randomUUID(), text('too early'));
+      await expect(bob.dev.groupDecrypt('alice-id', 1, body)).rejects.toBeInstanceOf(MissingSenderKeyError);
+    });
+
+    it('rejects a message that claims to be from someone other than its signer', async () => {
+      const alice = await makeDevice('alice-id', 1);
+      const mallory = await makeDevice('mallory-id', 1);
+      const bob = await makeDevice('bob-id', 1);
+      const dist = randomUUID();
+      await bob.dev.processSenderKeyDistribution('alice-id', 1, await alice.dev.senderKeyDistribution(dist));
+      // Mallory uses the same distribution id with her own key and the server labels it as Alice's.
+      await mallory.dev.senderKeyDistribution(dist);
+      const forged = await mallory.dev.groupEncrypt(dist, text('send me your recovery key'));
+      await expect(bob.dev.groupDecrypt('alice-id', 1, forged)).rejects.toThrow();
+    });
+
+    it('keeps sender keys across a restart', async () => {
+      const alice = await makeDevice('alice-id', 1);
+      const bob = await makeDevice('bob-id', 1);
+      const dist = randomUUID();
+      await bob.dev.processSenderKeyDistribution('alice-id', 1, await alice.dev.senderKeyDistribution(dist));
+      const reopened = await SignalDevice.open(bob.store);
+      reopened.setAddress('bob-id', 1);
+      const body = await alice.dev.groupEncrypt(dist, text('after restart'));
+      expect(read((await reopened.groupDecrypt('alice-id', 1, body)).plaintext)).toBe('after restart');
+    });
+
+    it('cannot read messages sent before it received the key, or under a rotated key', async () => {
+      const alice = await makeDevice('alice-id', 1);
+      const bob = await makeDevice('bob-id', 1);
+      const dist = randomUUID();
+      const old = await alice.dev.groupEncrypt(dist, text('before bob joined'));
+      await bob.dev.processSenderKeyDistribution('alice-id', 1, await alice.dev.senderKeyDistribution(dist));
+      await expect(bob.dev.groupDecrypt('alice-id', 1, old)).rejects.toThrow();
+      const rotated = await alice.dev.groupEncrypt(randomUUID(), text('after bob was removed'));
+      await expect(bob.dev.groupDecrypt('alice-id', 1, rotated)).rejects.toBeInstanceOf(MissingSenderKeyError);
+    });
   });
 });

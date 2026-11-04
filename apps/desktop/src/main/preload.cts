@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('silo', {
   space: invoke('silo:space'),
   createAccountInvite: invoke('silo:create-account-invite'),
   dm: invoke('silo:dm'),
+  channel: invoke('silo:channel'),
   onEvent: (listener: (event: unknown) => void) => {
     // Pass only the event data, never the IPC event object, to the page.
     const handler = (_e: unknown, event: unknown) => listener(event);

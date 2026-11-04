@@ -86,3 +86,65 @@ export type DeviceBundle = z.infer<typeof DeviceBundle>;
 export type Envelope = z.infer<typeof Envelope>;
 export type SendMessagesRequest = z.infer<typeof SendMessagesRequest>;
 export type DirectMessagePayload = z.infer<typeof DirectMessagePayload>;
+
+/**
+ * Sent inside a pairwise Signal message to hand over the sender's key for one
+ * channel. The pairwise session is what proves which device the key belongs to.
+ */
+export const SenderKeyPayload = z.object({
+  v: z.literal(1),
+  kind: z.literal('senderKey'),
+  spaceId: z.uuid(),
+  channelId: z.uuid(),
+  distributionId: z.uuid(),
+  skdm: b64.max(1024),
+});
+
+/** Anything that can arrive inside a pairwise Signal message. */
+export const PairwisePayload = z.discriminatedUnion('kind', [DirectMessagePayload, SenderKeyPayload]);
+
+/** The plaintext of a channel message, encrypted once with the sender's key. */
+export const ChannelMessagePayload = z.object({
+  v: z.literal(1),
+  kind: z.literal('channel'),
+  id: z.uuid(),
+  spaceId: z.uuid(),
+  channelId: z.uuid(),
+  sentAt: z.iso.datetime(),
+  text: z.string().min(1).max(4000),
+});
+
+/** Every member device of a space that can receive encrypted messages, except the caller's. */
+export const SpaceDevicesResponse = z.object({
+  devices: z.array(z.object({ userId: z.uuid(), deviceId: z.uuid(), signalDeviceId: z.number().int() })),
+});
+
+/** Pairwise copies of a sender key, for any member devices that don't have it yet. */
+export const DistributeSenderKeyRequest = z.object({
+  messages: z
+    .array(z.object({ deviceId: z.uuid(), type: SignalMessageType, body: b64.max(8 * 1024) }))
+    .min(1)
+    .max(500),
+});
+
+export const PostChannelMessageRequest = z.object({ body: b64.max(96 * 1024) });
+
+export const ChannelMessage = z.object({
+  /** Increases with every message on the server, so a device can ask for everything after the last one it saw. */
+  seq: z.number().int(),
+  spaceId: z.uuid(),
+  channelId: z.uuid(),
+  senderUserId: z.uuid(),
+  senderUsername: z.string(),
+  senderDeviceId: z.uuid(),
+  senderSignalDeviceId: z.number().int(),
+  body: b64,
+  receivedAt: z.iso.datetime(),
+});
+
+export const ChannelMessageList = z.object({ messages: z.array(ChannelMessage) });
+
+export type SenderKeyPayload = z.infer<typeof SenderKeyPayload>;
+export type PairwisePayload = z.infer<typeof PairwisePayload>;
+export type ChannelMessagePayload = z.infer<typeof ChannelMessagePayload>;
+export type ChannelMessage = z.infer<typeof ChannelMessage>;
