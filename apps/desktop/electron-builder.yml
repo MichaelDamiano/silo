@@ -2,6 +2,7 @@
 appId: org.silo.desktop
 productName: Silo
 executableName: silo
+artifactName: "silo-${version}-${os}-${arch}.${ext}"
 copyright: Silo contributors, AGPL-3.0-only
 directories:
   output: release
