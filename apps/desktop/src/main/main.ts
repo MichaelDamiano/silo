@@ -112,6 +112,7 @@ app.whenReady().then(async () => {
   handle(IPC.createAccountInvite, () => wrap(() => need().createAccountInvite()));
   handle(IPC.dm, (action: unknown) => wrap(() => need().dm(action)));
   handle(IPC.channel, (action: unknown) => wrap(() => need().channel(action)));
+  handle(IPC.connection, (action: unknown) => wrap(() => need().connection(action)));
   handle(IPC.space, (action: unknown) => wrap(() => need().space(action)));
 
   await createWindow();

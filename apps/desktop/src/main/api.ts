@@ -25,7 +25,9 @@ import type { AccountView, LinkTicket, PendingDevice, RecoverInput, SignupInput 
 import { runSpaceAction } from './spaces.js';
 import { HttpStatusError, Messenger } from './messenger.js';
 import type { Vault } from './vault.js';
-import type { AppEvent, ChannelView, Conversation, ConversationSummary } from '../shared/ipc.js';
+import { ServerDirectory, type KnownServer } from './servers.js';
+import type { Transport } from './transport.js';
+import type { AppEvent, ChannelView, ConnectionView, Conversation, ConversationSummary } from '../shared/ipc.js';
 
 const DmActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('list') }),
@@ -33,27 +35,31 @@ const DmActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('send'), peerUserId: z.uuid(), peerUsername: z.string().max(32), text: z.string().max(4000) }),
 ]);
 
+const ConnectionActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('get') }),
+  z.object({
+    kind: z.literal('setTor'),
+    proxyHost: z.string().regex(/^[A-Za-z0-9.:[\]-]{1,255}$/),
+    proxyPort: z.number().int().min(1).max(65535),
+    always: z.boolean(),
+  }),
+  z.object({ kind: z.literal('addAddress'), address: z.string().max(256) }),
+  z.object({ kind: z.literal('removeAddress'), address: z.string().max(256) }),
+]);
+
 const ChannelActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('get'), spaceId: z.uuid(), channelId: z.uuid() }),
   z.object({ kind: z.literal('send'), spaceId: z.uuid(), channelId: z.uuid(), text: z.string().max(4000) }),
 ]);
 
-/** Plain http is only allowed to this machine, for local development. */
-export function normalizeServerUrl(input: string): string {
-  const url = new URL(input.trim());
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
-    throw new Error('The server address must use https:// (http:// is only allowed for localhost).');
-  }
-  if (url.username || url.password) throw new Error('The server address must not contain a username or password.');
-  return url.origin;
-}
+export { normalizeServerUrl } from './servers.js';
 
-async function call<T>(base: string, path: string, init: RequestInit, parse: (v: unknown) => T): Promise<T> {
-  const res = await fetch(base + path, {
+type Init = { method?: string; headers?: Record<string, string>; body?: string };
+
+async function call<T>(net: Transport, path: string, init: Init, parse: (v: unknown) => T): Promise<T> {
+  const res = await net.request(path, {
     ...init,
     headers: { ...(init.body === undefined ? {} : { 'content-type': 'application/json' }), ...init.headers },
-    redirect: 'error',
   });
   const body = res.status === 204 ? undefined : await res.json().catch(() => undefined);
   if (!res.ok) {
@@ -66,8 +72,9 @@ async function call<T>(base: string, path: string, init: RequestInit, parse: (v:
 const none = () => undefined;
 
 export class SiloClient {
-  private session?: { base: string; token: string; userId: string; deviceId: string };
-  private waitingLink?: { base: string };
+  private session?: { net: Transport; server: KnownServer; token: string; userId: string; deviceId: string };
+  private waitingLink?: { net: Transport; server: KnownServer };
+  private dir?: Promise<ServerDirectory>;
   private lookedUp?: PendingLink;
   private messenger?: Messenger;
 
@@ -77,16 +84,46 @@ export class SiloClient {
     private readonly emit: (event: AppEvent) => void = () => undefined,
   ) {}
 
+  private directory(): Promise<ServerDirectory> {
+    return (this.dir ??= ServerDirectory.open(this.vault));
+  }
+
+  /** Finds a working address for the server and checks its identity before anything is sent. */
+  private async connect(serverUrl: string) {
+    return (await this.directory()).connect(serverUrl, (endpoint, viaTor) => this.emit({ type: 'connection', endpoint, viaTor }));
+  }
+
+  private signedIn(net: Transport, server: KnownServer, s: { token: string; userId: string; deviceId: string }) {
+    if (this.session && this.session.net !== net) this.session.net.close();
+    this.session = { net, server, token: s.token, userId: s.userId, deviceId: s.deviceId };
+    this.emit({ type: 'connection', endpoint: net.current, viaTor: net.viaTor() });
+  }
+
+  private endSession() {
+    this.messenger?.stop();
+    this.messenger = undefined;
+    this.session?.net.close();
+    this.session = undefined;
+  }
+
   /** Starts encrypted messaging once signed in. Failures are reported but don't block sign-in. */
   private async startMessenger() {
     const s = this.session;
     if (!s || !this.vault) return;
+    // Pick up any addresses the server has published since we last looked.
+    await this.directory()
+      .then((d) => d.refresh(s.net, s.server.serverKey))
+      .then((server) => (s.server = server))
+      .catch(() => undefined);
     this.messenger?.stop();
     try {
       this.messenger = await Messenger.start(
         this.vault,
         {
-          ...s,
+          token: s.token,
+          userId: s.userId,
+          deviceId: s.deviceId,
+          socket: (path) => s.net.socket(path),
           request: (method, path, body, parse) =>
             this.authed(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, parse),
           sign: (payload) => sign(payload, this.key.secretKey),
@@ -107,6 +144,36 @@ export class SiloClient {
     return m.send(a.peerUserId, a.peerUsername, a.text);
   }
 
+  /** Connection settings: which address is in use, the server's addresses, and Tor. */
+  async connection(input: unknown): Promise<ConnectionView> {
+    const a = ConnectionActionSchema.parse(input);
+    const dir = await this.directory();
+    const s = this.session;
+    if (a.kind === 'setTor') {
+      const tor = { proxyHost: a.proxyHost, proxyPort: a.proxyPort, always: a.always };
+      await dir.setTor(tor);
+      s?.net.setTor(tor);
+      this.waitingLink?.net.setTor(tor);
+    } else if (a.kind === 'addAddress' || a.kind === 'removeAddress') {
+      if (!s) throw new Error('Sign in first.');
+      s.server =
+        a.kind === 'addAddress' ? await dir.addAddress(s.server.serverKey, a.address) : await dir.removeAddress(s.server.serverKey, a.address);
+      s.net.setEndpoints(dir.addressesFor(s.server, s.net.current));
+    }
+    return {
+      tor: dir.tor,
+      current: s ? { endpoint: s.net.current, viaTor: s.net.viaTor() } : null,
+      serverFingerprint: s ? fingerprint(s.server.serverKey) : null,
+      addresses: s
+        ? dir.addressesFor(s.server).map((endpoint) => ({
+            endpoint,
+            published: s.server.endpoints.includes(endpoint),
+            onion: /\.onion$/.test(new URL(endpoint).hostname),
+          }))
+        : [],
+    };
+  }
+
   async channel(input: unknown): Promise<ChannelView> {
     const a = ChannelActionSchema.parse(input);
     const m = this.messenger;
@@ -123,16 +190,16 @@ export class SiloClient {
     return fingerprint(this.publicKey);
   }
 
-  private challenge(base: string) {
-    return call(base, '/v1/auth/challenge', { method: 'POST', body: JSON.stringify({ devicePublicKey: this.publicKey }) }, (v) =>
+  private challenge(net: Transport) {
+    return call(net, '/v1/auth/challenge', { method: 'POST', body: JSON.stringify({ devicePublicKey: this.publicKey }) }, (v) =>
       ChallengeResponse.parse(v),
     );
   }
 
-  private authed<T>(path: string, init: RequestInit & { method?: string }, parse: (v: unknown) => T): Promise<T> {
+  private authed<T>(path: string, init: Init, parse: (v: unknown) => T): Promise<T> {
     const s = this.session;
     if (!s) throw new Error('Not signed in.');
-    return call(s.base, path, { ...init, headers: { ...init.headers, authorization: `Bearer ${s.token}` } }, parse);
+    return call(s.net, path, { ...init, headers: { ...init.headers, authorization: `Bearer ${s.token}` } }, parse);
   }
 
   private post<T>(path: string, body: unknown, parse: (v: unknown) => T = none as () => T): Promise<T> {
@@ -140,14 +207,14 @@ export class SiloClient {
   }
 
   async signup(input: SignupInput): Promise<{ account: AccountView; recoveryKey: string }> {
-    const base = normalizeServerUrl(input.serverUrl);
+    const { transport: net, server } = await this.connect(input.serverUrl);
     const username = input.username.trim();
     // The recovery key is never stored: it is shown once for the user to write down.
     const recovery = generateDeviceKeyPair();
     const recoveryPublicKey = toBase64Url(recovery.publicKey);
-    const c = await this.challenge(base);
+    const c = await this.challenge(net);
     const session = await call(
-      base,
+      net,
       '/v1/accounts',
       {
         method: 'POST',
@@ -163,16 +230,20 @@ export class SiloClient {
       },
       (v) => SessionResponse.parse(v),
     );
-    this.session = { base, token: session.token, userId: session.userId, deviceId: session.deviceId };
+    this.signedIn(net, server, session);
     await this.startMessenger();
     return { account: await this.me(), recoveryKey: formatRecoveryKey(recovery.secretKey) };
   }
 
   async login(serverUrl: string): Promise<AccountView> {
-    const base = normalizeServerUrl(serverUrl);
-    const c = await this.challenge(base);
+    const { transport, server } = await this.connect(serverUrl);
+    return this.loginWith(transport, server);
+  }
+
+  private async loginWith(net: Transport, server: KnownServer): Promise<AccountView> {
+    const c = await this.challenge(net);
     const session = await call(
-      base,
+      net,
       '/v1/auth/login',
       {
         method: 'POST',
@@ -184,26 +255,25 @@ export class SiloClient {
       },
       (v) => SessionResponse.parse(v),
     );
-    this.session = { base, token: session.token, userId: session.userId, deviceId: session.deviceId };
+    this.signedIn(net, server, session);
     await this.startMessenger();
     return this.me();
   }
 
   async logout(): Promise<void> {
     this.messenger?.stop();
-    this.messenger = undefined;
     if (this.session) await this.post('/v1/auth/logout', {}).catch(none);
-    this.session = undefined;
+    this.endSession();
     this.lookedUp = undefined;
   }
 
   async requestLink(input: { serverUrl: string; username: string; deviceName: string }): Promise<LinkTicket> {
-    const base = normalizeServerUrl(input.serverUrl);
+    const { transport: net, server } = await this.connect(input.serverUrl);
     const username = input.username.trim();
     const deviceName = input.deviceName.trim();
-    const c = await this.challenge(base);
+    const c = await this.challenge(net);
     const res = await call(
-      base,
+      net,
       '/v1/device-links',
       {
         method: 'POST',
@@ -217,7 +287,8 @@ export class SiloClient {
       },
       (v) => LinkRequestResponse.parse(v),
     );
-    this.waitingLink = { base };
+    this.waitingLink?.net.close();
+    this.waitingLink = { net, server };
     const code = res.pairingCode;
     return { pairingCode: `${code.slice(0, 5)}-${code.slice(5)}`, fingerprint: this.fingerprint, expiresAt: res.expiresAt };
   }
@@ -226,14 +297,14 @@ export class SiloClient {
     const waiting = this.waitingLink;
     if (!waiting) throw new Error('This device is not waiting for approval.');
     const { approved } = await call(
-      waiting.base,
+      waiting.net,
       '/v1/device-links/status',
       { method: 'POST', body: JSON.stringify({ devicePublicKey: this.publicKey }) },
       (v) => z.object({ approved: z.boolean() }).parse(v),
     );
     if (!approved) return null;
     this.waitingLink = undefined;
-    return this.login(waiting.base);
+    return this.loginWith(waiting.net, waiting.server);
   }
 
   async lookupLink(pairingCode: string): Promise<PendingDevice> {
@@ -259,22 +330,20 @@ export class SiloClient {
     const me = await this.me().catch(() => undefined);
     if (!me) {
       // We revoked this very device, so its session is gone too.
-      this.messenger?.stop();
-      this.messenger = undefined;
-      this.session = undefined;
+      this.endSession();
       throw new Error('This device was revoked and signed out.');
     }
     return me;
   }
 
   async recover(input: RecoverInput): Promise<{ account: AccountView; recoveryKey: string }> {
-    const base = normalizeServerUrl(input.serverUrl);
+    const { transport: net, server } = await this.connect(input.serverUrl);
     const username = input.username.trim();
     const recoverySecret = parseRecoveryKey(input.recoveryKey);
-    const c = await this.challenge(base);
+    const c = await this.challenge(net);
     const payload = recoverPayload(c.nonce, username, this.publicKey);
     const session = await call(
-      base,
+      net,
       '/v1/accounts/recover',
       {
         method: 'POST',
@@ -290,7 +359,7 @@ export class SiloClient {
       },
       (v) => SessionResponse.parse(v),
     );
-    this.session = { base, token: session.token, userId: session.userId, deviceId: session.deviceId };
+    this.signedIn(net, server, session);
     await this.startMessenger();
     // The old recovery key has now been typed in, so replace it straight away.
     const { recoveryKey } = await this.rotateRecoveryKey();

@@ -21,6 +21,8 @@ export interface SiloBridge {
   dm<A extends DmAction>(action: A): Promise<Result<DmResult<A>>>;
   /** Encrypted channel messages: open a channel's history, or send to it. */
   channel(action: ChannelAction): Promise<Result<ChannelView>>;
+  /** Connection settings: the address in use, the server's other addresses, and Tor. */
+  connection(action: ConnectionAction): Promise<Result<ConnectionView>>;
   /** Subscribes to live updates such as new messages. Returns an unsubscribe function. */
   onEvent(listener: (event: AppEvent) => void): () => void;
   /** Everything to do with servers goes through one call, validated in the main process. */
@@ -77,8 +79,29 @@ export type ChannelAction =
   | { kind: 'get'; spaceId: string; channelId: string }
   | { kind: 'send'; spaceId: string; channelId: string; text: string };
 
+export interface TorSettings {
+  proxyHost: string;
+  proxyPort: number;
+  always: boolean;
+}
+
+export interface ConnectionView {
+  tor: TorSettings;
+  current: { endpoint: string; viaTor: boolean } | null;
+  /** Short fingerprint of the server's pinned identity key. */
+  serverFingerprint: string | null;
+  addresses: { endpoint: string; published: boolean; onion: boolean }[];
+}
+
+export type ConnectionAction =
+  | { kind: 'get' }
+  | ({ kind: 'setTor' } & TorSettings)
+  | { kind: 'addAddress'; address: string }
+  | { kind: 'removeAddress'; address: string };
+
 export type AppEvent =
   | { type: 'messages'; peerUserId: string }
+  | { type: 'connection'; endpoint: string; viaTor: boolean }
   | { type: 'channel'; channelId: string }
   | { type: 'error'; message: string };
 
@@ -176,5 +199,6 @@ export const IPC = {
   createAccountInvite: 'silo:create-account-invite',
   dm: 'silo:dm',
   channel: 'silo:channel',
+  connection: 'silo:connection',
   event: 'silo:event',
 } as const;

@@ -2,7 +2,7 @@
 
 An invite-only, end-to-end encrypted messaging app with servers, channels and direct messages, built to keep working when the main server is blocked or down.
 
-> Status: early prototype. Accounts, devices, recovery keys, servers, roles, moderation, and end-to-end encrypted direct messages and channel messages work. More ways to connect (relays, Tor, LAN) are next.
+> Status: early prototype. Accounts, devices, recovery keys, servers, roles, moderation, and end-to-end encrypted direct messages and channel messages work. Fallback addresses, relays and Tor onion access work. Connecting over the local network (LAN) is next.
 
 ## How accounts work
 
@@ -39,6 +39,32 @@ An invite-only, end-to-end encrypted messaging app with servers, channels and di
 - A device only gets messages sent after both it and its account joined. If a message arrives before its key, it waits for the key for up to 7 days.
 - The server deletes channel ciphertext after 30 days. Decrypted history stays on each device in the encrypted vault.
 
+## Staying connected
+
+- A server can be reached at several addresses: its main one, mirrors or relays, and a Tor onion address. It publishes the list signed with its own identity key, which each device pins the first time it connects.
+- If the address in use stops working, the app moves to the next one by itself and stays there. It only ever uses addresses the server signed or that you added, and it refuses any address that answers with a different identity key than before.
+- You can add an address by hand, for example an onion address a friend sends you when the main one is blocked. It's only added if the same server answers there.
+- Onion addresses go through Tor's SOCKS proxy (the Tor service on port 9050, or Tor Browser on 9150). You can also send all traffic through Tor so the server never sees your IP address.
+- A request that might already have reached the server is only retried on another address if it's safe to repeat, so a flaky connection doesn't send things twice.
+
+### Running a Tor onion service
+
+```sh
+docker compose --profile tor up --build
+```
+
+Tor creates the onion address on first start and prints it. The server picks it up and publishes it to clients automatically. The onion keys live in the `tor-keys` volume, so back that up to keep the same address.
+
+### Running a relay
+
+`tools/relay/relay.mjs` forwards raw TCP to the server without decrypting anything, so it never sees tokens or messages. It has no dependencies and logs no addresses.
+
+```sh
+LISTEN=0.0.0.0:443 UPSTREAM=silo.example.com:443 node tools/relay/relay.mjs
+```
+
+Then add the relay to the server's published list, for example `PUBLIC_URLS=https://relay.example.net`. The server's TLS certificate must also cover the relay's hostname. Plain `http://` addresses are only allowed for localhost and onion services.
+
 ## Layout
 
 | Path | What it is |
@@ -47,6 +73,8 @@ An invite-only, end-to-end encrypted messaging app with servers, channels and di
 | `packages/signal` | The Signal protocol engine for one device, built on libsignal |
 | `apps/server` | Node + Fastify API with Postgres |
 | `apps/desktop` | Electron + React desktop client |
+| `tools/relay` | A tiny TCP relay for when the main address is blocked |
+| `tools/tor` | Tor onion service image used by Docker Compose |
 
 ## Running it locally
 

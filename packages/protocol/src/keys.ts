@@ -34,6 +34,7 @@ export const SIGNING_CONTEXT = {
   recover: 'silo/v1/recover',
   rotateRecovery: 'silo/v1/rotate-recovery',
   signalIdentity: 'silo/v1/signal-identity',
+  serverInfo: 'silo/v1/server-info',
 } as const;
 
 export type SigningPurpose = keyof typeof SIGNING_CONTEXT;
@@ -113,4 +114,9 @@ export function parseRecoveryKey(text: string): Uint8Array {
   const bytes = fromBase32(text.replace(/[\s-]/g, '').toUpperCase());
   if (bytes.length !== 32) throw new Error('That recovery key is not the right length.');
   return bytes;
+}
+
+/** Signed by the server's own identity key over its address list (a JSON string). */
+export function serverInfoPayload(info: string): Uint8Array {
+  return signingPayload('serverInfo', [info]);
 }

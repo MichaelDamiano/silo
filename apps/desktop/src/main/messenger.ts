@@ -17,6 +17,7 @@ import { z } from 'zod';
 import type { AppEvent, ChannelMessageView, ChannelView, Conversation, ConversationSummary, DmMessage } from '../shared/ipc.js';
 import type { ChannelMessage } from '@silo/protocol';
 import type { Vault } from './vault.js';
+import type { WebSocket } from 'undici';
 
 const PREKEY_LOW_WATER = 20;
 const DeviceList = z.object({ devices: z.array(z.object({ deviceId: z.uuid(), signalDeviceId: z.number().int() })) });
@@ -57,7 +58,8 @@ export class HttpStatusError extends Error {
 }
 
 export interface Api {
-  base: string;
+  /** Opens the live WebSocket on whichever server address is working. */
+  socket(path: string): WebSocket;
   token: string;
   userId: string;
   deviceId: string;
@@ -127,8 +129,7 @@ export class Messenger {
 
   private connect() {
     if (this.stopped) return;
-    const url = this.api.base.replace(/^http/, 'ws') + '/v1/live';
-    const ws = new WebSocket(url);
+    const ws = this.api.socket('/v1/live');
     this.ws = ws;
     ws.addEventListener('open', () => {
       this.retry = 1000;
@@ -144,6 +145,8 @@ export class Messenger {
     });
     ws.addEventListener('close', (ev) => {
       if (this.stopped || ev.code === 4001) return;
+      // A sync goes over HTTPS, which moves to another address if this one is down.
+      void this.sync();
       // Reconnect with backoff, and catch up on anything missed while offline.
       setTimeout(() => this.connect(), this.retry);
       this.retry = Math.min(this.retry * 2, 30_000);

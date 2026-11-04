@@ -1,3 +1,5 @@
+import { Endpoint } from '@silo/protocol';
+
 export interface Config {
   databaseUrl: string;
   port: number;
@@ -10,6 +12,10 @@ export interface Config {
   trustProxy: boolean;
   /** Sign-up, login and challenge requests allowed per IP per minute. */
   authRateLimitPerMinute: number;
+  /** Addresses this server publishes for clients to fall back to, most preferred first. */
+  publicUrls: string[];
+  /** Where Tor writes this server's onion hostname, so it can be published automatically. */
+  onionHostnameFile?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -23,5 +29,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     challengeTtlMs: 60_000,
     trustProxy: env.TRUST_PROXY === 'true',
     authRateLimitPerMinute: Number(env.AUTH_RATE_LIMIT_PER_MINUTE ?? 10),
+    publicUrls: (env.PUBLIC_URLS ?? '')
+      .split(',')
+      .map((u) => u.trim())
+      .filter(Boolean)
+      .map((u) => {
+        const parsed = Endpoint.safeParse(new URL(u).origin);
+        if (!parsed.success) throw new Error(`PUBLIC_URLS: ${u} ${parsed.error.issues[0]?.message}`);
+        return parsed.data;
+      }),
+    onionHostnameFile: env.ONION_HOSTNAME_FILE || undefined,
   };
 }

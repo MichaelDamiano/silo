@@ -1,0 +1,6 @@
+DataDirectory /var/lib/tor
+# No SOCKS port: this Tor only hosts the onion service.
+SocksPort 0
+HiddenServiceDir /var/lib/tor/silo
+HiddenServicePort 80 server:8443
+Log notice stdout

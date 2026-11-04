@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { AccountView, ConversationSummary, DeviceInfo, LinkTicket, PendingDevice, Result, SpaceSummary } from '../shared/ipc';
 import { DmPage } from './Dms';
+import { ConnectionSettings } from './Connection';
 import { NewSpace, Sidebar, SpacePage } from './Spaces';
 
 type Mode = 'signup' | 'login' | 'link' | 'recover';
@@ -113,6 +114,7 @@ function AuthForm({
   const submitLabel = { signup: 'Create account', login: 'Log in', link: 'Ask to join', recover: 'Recover account' }[mode];
 
   return (
+    <>
     <form onSubmit={submit}>
       <div className="tabs">
         {tab('signup', 'Join with invite')}
@@ -157,6 +159,11 @@ function AuthForm({
         </button>
       </div>
     </form>
+    <details className="advanced">
+      <summary>Tor settings</summary>
+      <ConnectionSettings signedIn={false} />
+    </details>
+    </>
   );
 }
 
@@ -390,6 +397,9 @@ function AccountScreen({
           <code className="block" data-testid="account-invite">{accountInvite.code}</code>
         </p>
       )}
+
+      <h2>Connection</h2>
+      <ConnectionSettings signedIn />
 
       {error && <div className="error">{error}</div>}
 
