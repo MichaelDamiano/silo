@@ -9,6 +9,7 @@ import { deviceRoutes } from './routes/devices.js';
 import { inviteRoutes } from './routes/invites.js';
 import { spaceRoutes } from './routes/spaces.js';
 import { messagingRoutes } from './routes/messaging.js';
+import { channelRoutes } from './routes/channels.js';
 import { LiveHub, liveRoutes } from './live.js';
 
 export async function buildApp(config: Config, db: Db, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
@@ -54,6 +55,7 @@ export async function buildApp(config: Config, db: Db, opts: { logger?: boolean 
   await app.register(inviteRoutes, { db });
   await app.register(spaceRoutes, { db });
   await app.register(messagingRoutes, { db });
+  await app.register(channelRoutes, { db });
   await app.register(liveRoutes, { db });
   return app;
 }

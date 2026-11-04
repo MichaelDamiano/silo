@@ -2,7 +2,7 @@
 
 An invite-only, end-to-end encrypted messaging app with servers, channels and direct messages, built to keep working when the main server is blocked or down.
 
-> Status: early prototype. Accounts, devices, recovery keys, servers, roles, moderation and end-to-end encrypted direct messages work. Encrypted channel messages are next.
+> Status: early prototype. Accounts, devices, recovery keys, servers, roles, moderation, and end-to-end encrypted direct messages and channel messages work. More ways to connect (relays, Tor, LAN) are next.
 
 ## How accounts work
 
@@ -30,6 +30,14 @@ An invite-only, end-to-end encrypted messaging app with servers, channels and di
 - You can DM people you share a server with. If someone's encryption key changes unexpectedly, their messages are blocked rather than trusted.
 - On the device, Signal state and message history are stored encrypted with AES-256-GCM under a key sealed by the OS keychain.
 - A newly linked device sees messages from the moment it joins, not older history.
+
+## Channel messages
+
+- Channels use Signal's sender keys, also through libsignal. Each device has its own key per channel and hands it to every member device over their pairwise Signal sessions, so the server can't swap or read it.
+- Each message is then encrypted once and signed with the sender's key. The server stores one copy and serves it to members' devices, which check the signature and that the message really belongs to that channel.
+- When someone leaves or is kicked or banned, or a device is revoked, each sender replaces its key before its next message, so the removed devices can't read anything new.
+- A device only gets messages sent after both it and its account joined. If a message arrives before its key, it waits for the key for up to 7 days.
+- The server deletes channel ciphertext after 30 days. Decrypted history stays on each device in the encrypted vault.
 
 ## Layout
 

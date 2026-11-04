@@ -19,6 +19,8 @@ export interface SiloBridge {
   createAccountInvite(): Promise<Result<{ code: string; expiresAt: string; maxUses: number }>>;
   /** Direct messages: list conversations, open one, or send. */
   dm<A extends DmAction>(action: A): Promise<Result<DmResult<A>>>;
+  /** Encrypted channel messages: open a channel's history, or send to it. */
+  channel(action: ChannelAction): Promise<Result<ChannelView>>;
   /** Subscribes to live updates such as new messages. Returns an unsubscribe function. */
   onEvent(listener: (event: AppEvent) => void): () => void;
   /** Everything to do with servers goes through one call, validated in the main process. */
@@ -55,7 +57,30 @@ export type DmAction =
 
 export type DmResult<A extends DmAction> = A['kind'] extends 'list' ? ConversationSummary[] : Conversation;
 
-export type AppEvent = { type: 'messages'; peerUserId: string } | { type: 'error'; message: string };
+export interface ChannelMessageView {
+  id: string;
+  from: 'me' | 'them';
+  senderUserId: string;
+  senderUsername: string;
+  text: string;
+  sentAt: string;
+  /** Set while a message is waiting for its key, or when it couldn't be read. */
+  error?: string;
+}
+
+export interface ChannelView {
+  channelId: string;
+  messages: ChannelMessageView[];
+}
+
+export type ChannelAction =
+  | { kind: 'get'; spaceId: string; channelId: string }
+  | { kind: 'send'; spaceId: string; channelId: string; text: string };
+
+export type AppEvent =
+  | { type: 'messages'; peerUserId: string }
+  | { type: 'channel'; channelId: string }
+  | { type: 'error'; message: string };
 
 export interface SpaceSummary {
   id: string;
@@ -150,5 +175,6 @@ export const IPC = {
   space: 'silo:space',
   createAccountInvite: 'silo:create-account-invite',
   dm: 'silo:dm',
+  channel: 'silo:channel',
   event: 'silo:event',
 } as const;

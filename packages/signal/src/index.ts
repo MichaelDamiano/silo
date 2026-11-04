@@ -17,6 +17,8 @@ export interface SignalState {
   sessions: Record<string, string>;
   /** Identity keys of everyone we've talked to, by address. Trust on first use. */
   identities: Record<string, string>;
+  /** Sender keys for group channels, ours and other people's, by address and distribution id. */
+  senderKeys?: Record<string, string>;
 }
 
 export interface StateStore {
@@ -31,6 +33,13 @@ export class MemoryStateStore implements StateStore {
   }
   async save(state: SignalState) {
     this.state = structuredClone(state);
+  }
+}
+
+/** Thrown when a channel message arrives before the sender's key has reached us. */
+export class MissingSenderKeyError extends Error {
+  constructor() {
+    super('The key for this message has not arrived yet.');
   }
 }
 
@@ -247,6 +256,69 @@ export class SignalDevice {
         throw this.translate(err, envelope.senderUserId);
       }
     });
+  }
+
+  /**
+   * Our sender key for one channel distribution, as a distribution message to hand
+   * to each member device over its own pairwise session. Creates the key if needed.
+   */
+  senderKeyDistribution(distributionId: string): Promise<string> {
+    return this.run(async () => {
+      const msg = await S.SenderKeyDistributionMessage.create(this.requireSelf(), distributionId, this.senderKeyStore());
+      return b64(msg.serialize());
+    });
+  }
+
+  /**
+   * Stores someone's sender key. Only call this with a distribution message that
+   * arrived inside a pairwise Signal message from that same device, which is what
+   * proves who it came from.
+   */
+  processSenderKeyDistribution(senderUserId: string, senderSignalDeviceId: number, skdm: string): Promise<void> {
+    return this.run(async () => {
+      const from = S.ProtocolAddress.new(senderUserId, senderSignalDeviceId);
+      await S.processSenderKeyDistributionMessage(from, S.SenderKeyDistributionMessage.deserialize(unb64(skdm)), this.senderKeyStore());
+    });
+  }
+
+  /** Encrypts once for everyone holding our sender key for this distribution. */
+  groupEncrypt(distributionId: string, plaintext: Uint8Array): Promise<string> {
+    return this.run(async () => {
+      const me = this.requireSelf();
+      const store = this.senderKeyStore();
+      if (!(await store.getSenderKey(me, distributionId))) await S.SenderKeyDistributionMessage.create(me, distributionId, store);
+      const msg = await S.groupEncrypt(me, distributionId, store, new Uint8Array(plaintext));
+      return b64(msg.serialize());
+    });
+  }
+
+  /** Decrypts a channel message, checking it was signed by the sender key we hold for that device. */
+  groupDecrypt(senderUserId: string, senderSignalDeviceId: number, body: string): Promise<{ distributionId: string; plaintext: Uint8Array }> {
+    return this.run(async () => {
+      const from = S.ProtocolAddress.new(senderUserId, senderSignalDeviceId);
+      const bytes = unb64(body);
+      const distributionId = S.SenderKeyMessage.deserialize(bytes).distributionId();
+      if (!this.state.senderKeys?.[`${addrKey(from)}::${distributionId}`]) throw new MissingSenderKeyError();
+      try {
+        return { distributionId, plaintext: await S.groupDecrypt(from, this.senderKeyStore(), bytes) };
+      } catch (err) {
+        if (err instanceof S.LibSignalErrorBase && err.code === S.ErrorCode.InvalidSenderKeySession) throw new MissingSenderKeyError();
+        throw err;
+      }
+    });
+  }
+
+  private senderKeyStore() {
+    const keys = (this.state.senderKeys ??= {});
+    return new (class extends S.SenderKeyStore {
+      async saveSenderKey(a: S.ProtocolAddress, distributionId: string, r: S.SenderKeyRecord) {
+        keys[`${addrKey(a)}::${distributionId}`] = b64(r.serialize());
+      }
+      async getSenderKey(a: S.ProtocolAddress, distributionId: string) {
+        const v = keys[`${addrKey(a)}::${distributionId}`];
+        return v ? S.SenderKeyRecord.deserialize(unb64(v)) : null;
+      }
+    })();
   }
 
   /** How many one-time pre-keys this device still holds privately. */

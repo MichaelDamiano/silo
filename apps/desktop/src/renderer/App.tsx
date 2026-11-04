@@ -240,7 +240,7 @@ function Home(props: {
     void refreshDms();
     const off = window.silo.onEvent((e) => {
       if (e.type === 'messages') void refreshDms();
-      else setNotice(e.message);
+      else if (e.type === 'error') setNotice(e.message);
     });
     return () => {
       off();

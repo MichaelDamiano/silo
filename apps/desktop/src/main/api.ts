@@ -25,12 +25,17 @@ import type { AccountView, LinkTicket, PendingDevice, RecoverInput, SignupInput 
 import { runSpaceAction } from './spaces.js';
 import { HttpStatusError, Messenger } from './messenger.js';
 import type { Vault } from './vault.js';
-import type { AppEvent, Conversation, ConversationSummary } from '../shared/ipc.js';
+import type { AppEvent, ChannelView, Conversation, ConversationSummary } from '../shared/ipc.js';
 
 const DmActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('list') }),
   z.object({ kind: z.literal('get'), peerUserId: z.uuid(), peerUsername: z.string().max(32).optional() }),
   z.object({ kind: z.literal('send'), peerUserId: z.uuid(), peerUsername: z.string().max(32), text: z.string().max(4000) }),
+]);
+
+const ChannelActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('get'), spaceId: z.uuid(), channelId: z.uuid() }),
+  z.object({ kind: z.literal('send'), spaceId: z.uuid(), channelId: z.uuid(), text: z.string().max(4000) }),
 ]);
 
 /** Plain http is only allowed to this machine, for local development. */
@@ -100,6 +105,14 @@ export class SiloClient {
     if (a.kind === 'list') return m.conversations();
     if (a.kind === 'get') return m.conversation(a.peerUserId, a.peerUsername);
     return m.send(a.peerUserId, a.peerUsername, a.text);
+  }
+
+  async channel(input: unknown): Promise<ChannelView> {
+    const a = ChannelActionSchema.parse(input);
+    const m = this.messenger;
+    if (!m) throw new Error('Encrypted messaging isn’t running on this device.');
+    if (a.kind === 'get') return m.channel(a.channelId);
+    return m.sendToChannel(a.spaceId, a.channelId, a.text);
   }
 
   get publicKey() {
