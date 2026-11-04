@@ -15,7 +15,7 @@ import {
   type Envelope,
   type LanFrame,
 } from '@silo/protocol';
-import { IdentityChangedError, MissingSenderKeyError, SignalDevice, type StateStore, type Target } from '@silo/signal';
+import { IdentityChangedError, MissingSenderKeyError, SignalDevice, safetyNumber, type StateStore, type Target } from '@silo/signal';
 import { z } from 'zod';
 import type { AppEvent, ChannelMessageView, ChannelView, Conversation, ConversationSummary, DmMessage } from '../shared/ipc.js';
 import type { ChannelMessage } from '@silo/protocol';
@@ -103,6 +103,8 @@ export class Messenger {
   private outbox: OutboxItem[] = [];
   private directoryAt = 0;
   private lan?: LanNode;
+  /** People this account blocked. Their direct messages are dropped and their channel messages hidden. */
+  private blocked = new Set<string>();
 
   private constructor(
     private readonly vault: Vault,
@@ -124,6 +126,43 @@ export class Messenger {
     m.connect();
     await m.sync();
     return m;
+  }
+
+  setBlocked(userIds: string[]) {
+    this.blocked = new Set(userIds);
+  }
+
+  /**
+   * The safety number for a conversation, over every device of both people as the
+   * server lists them now. It is null until we've exchanged keys with all of them,
+   * which happens once each person has sent the other a message.
+   */
+  async safety(peerUserId: string): Promise<{ number: string | null; theirDevices: number; myDevices: number; missing: number }> {
+    const list = (userId: string) =>
+      this.api.request('GET', `/v1/users/${userId}/devices`, undefined, (v) => DeviceList.parse(v)).then((r) => r.devices.map((d) => d.signalDeviceId));
+    const [theirs, mine] = await Promise.all([list(peerUserId), list(this.api.userId)]);
+    const theirKeys = this.signal.identityKeysOf(peerUserId, theirs);
+    const myKeys = [this.signal.identityKey, ...this.signal.identityKeysOf(this.api.userId, mine)];
+    const missing = [...theirKeys, ...myKeys].filter((k) => !k).length;
+    return {
+      number:
+        missing || !theirKeys.length
+          ? null
+          : safetyNumber({ userId: this.api.userId, identityKeys: myKeys as string[] }, { userId: peerUserId, identityKeys: theirKeys as string[] }),
+      theirDevices: theirs.length,
+      myDevices: mine.length + 1,
+      missing,
+    };
+  }
+
+  /** Trusts whatever keys the server now has for this person. Only after checking with them outside Silo. */
+  async acceptNewKeys(peerUserId: string) {
+    await this.signal.forgetUser(peerUserId);
+  }
+
+  /** Our own decrypted copy of a channel message, by the server's sequence number. */
+  channelMessage(channelId: string, seq: number): ChannelMessageView | undefined {
+    return this.channels.history[channelId]?.find((m) => m.seq === seq);
   }
 
   stop() {
@@ -261,11 +300,13 @@ export class Messenger {
         await this.signal.processSenderKeyDistribution(e.senderUserId, e.senderSignalDeviceId, payload.skdm);
         return;
       }
+      // Blocked people's messages can still arrive over the local network; drop them here too.
+      if (!fromMe && this.blocked.has(e.senderUserId)) return;
       // A copy from one of our own devices belongs to the conversation it was sent in.
       if (fromMe) peer = { id: payload.peerUserId, name: payload.peerUsername };
       msg = { id: payload.id, from: fromMe ? 'me' : 'them', text: payload.text, sentAt: payload.sentAt };
     } catch (err) {
-      if (fromMe) return;
+      if (fromMe || this.blocked.has(e.senderUserId)) return;
       msg = {
         id: e.id,
         from: 'them',
@@ -377,7 +418,10 @@ export class Messenger {
   }
 
   channel(channelId: string): ChannelView {
-    return { channelId, messages: this.channels.history[channelId] ?? [] };
+    const messages = (this.channels.history[channelId] ?? []).map((m) =>
+      this.blocked.has(m.senderUserId) && m.from !== 'me' ? { ...m, blocked: true } : m,
+    );
+    return { channelId, messages };
   }
 
   /** Fetches new channel messages, then retries any that were waiting for a sender key. */
@@ -402,7 +446,7 @@ export class Messenger {
   private async receiveChannel(m: ChannelMessage, touched: Set<string>) {
     const list = (this.channels.history[m.channelId] ??= []);
     const placeholder = `srv-${m.seq}`;
-    const base = { from: 'them' as const, senderUserId: m.senderUserId, senderUsername: m.senderUsername };
+    const base = { from: 'them' as const, senderUserId: m.senderUserId, senderUsername: m.senderUsername, ...(m.seq > 0 ? { seq: m.seq } : {}) };
     let msg: ChannelMessageView;
     try {
       const { plaintext } = await this.signal.groupDecrypt(m.senderUserId, m.senderSignalDeviceId, m.body);
@@ -428,7 +472,10 @@ export class Messenger {
     }
     const i = list.findIndex((x) => x.id === placeholder);
     if (i >= 0) list.splice(i, 1);
-    if (!list.some((x) => x.id === msg.id)) list.push(msg);
+    const known = list.find((x) => x.id === msg.id);
+    // The same message can come over the local network first; the server's copy adds its number.
+    if (known) known.seq ??= msg.seq;
+    else list.push(msg);
     list.sort((a, b) => a.sentAt.localeCompare(b.sentAt));
     touched.add(m.channelId);
   }

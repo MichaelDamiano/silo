@@ -79,6 +79,13 @@ Then add the relay to the server's published list, for example `PUBLIC_URLS=http
 - Each device keeps at most 5 sessions, and older ones are signed out. Each person can have 10 unused sign-up codes and be in 200 servers.
 - A device with 5,000 undelivered messages stops accepting more until it catches up, so nobody can fill the server's disk by flooding one person.
 
+## Safety tools
+
+- **Safety numbers.** Each direct message conversation has a 60-digit number made from every device key on both sides. Compare it with the other person in person or on a call, then mark it as verified. If either of you adds a device, or a key is replaced, the app warns that the number changed. This catches a server that slips in a device of its own.
+- **Changed keys.** The server never replaces a device's key, so a changed key blocks messages until you check with the person outside Silo and accept it.
+- **Blocking.** Direct messages from someone you blocked are dropped by the server, and by your app if they arrive over the local network. They aren't told. Their channel messages are hidden for you, with a way to show one.
+- **Reports.** Any member can report a channel message or a person to the server's owner and admins. Messages are end-to-end encrypted, so the report carries the text as the reporter saw it. A moderator's app checks it against the moderator's own decrypted copy and says whether it matches, so a report can't put words in someone's mouth. The server also checks that the reported message really was sent by the person reported.
+
 ## Running it in production
 
 - Set `SERVER_KEY_FILE` so the server's identity secret lives in a file only the server can read, not in the database or its backups. Docker Compose does this with the `server-keys` volume. Back that volume up: if the key is lost, every client sees a new server it doesn't trust.

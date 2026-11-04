@@ -202,13 +202,19 @@ export async function messagingRoutes(app: FastifyInstance, opts: { db: Db }) {
     }
     if (!expected.rows.some((r) => r.user_id === body.recipientUserId)) throw new HttpError(409, "that person hasn't set up encryption on any device yet");
 
-    await requireMailboxRoom(db, [...got]);
+    // If the recipient blocked the sender, their copies are dropped. The sender gets the
+    // same answer either way, so blocking someone doesn't tell them they're blocked.
+    const blocked = await db.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [body.recipientUserId, me.userId]);
+    const recipientDevices = new Set(expected.rows.filter((r) => r.user_id === body.recipientUserId).map((r) => r.id));
+    const keep = blocked.rows[0] ? body.messages.filter((m) => !recipientDevices.has(m.deviceId)) : body.messages;
+    const targets = new Set(keep.map((m) => m.deviceId));
+    await requireMailboxRoom(db, [...targets]);
     await db.query(
       `INSERT INTO envelopes (recipient_device, sender_user, sender_device, message_type, body)
        SELECT d, $1, $2, t, decode(b, 'base64') FROM unnest($3::uuid[], $4::smallint[], $5::text[]) AS m(d, t, b)`,
-      [me.userId, me.deviceId, body.messages.map((m) => m.deviceId), body.messages.map((m) => m.type), body.messages.map((m) => m.body)],
+      [me.userId, me.deviceId, keep.map((m) => m.deviceId), keep.map((m) => m.type), keep.map((m) => m.body)],
     );
-    app.live.notify(got);
+    app.live.notify(targets);
     reply.code(202);
     return { delivered: body.messages.length };
   });
