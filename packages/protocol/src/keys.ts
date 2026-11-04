@@ -35,6 +35,7 @@ export const SIGNING_CONTEXT = {
   rotateRecovery: 'silo/v1/rotate-recovery',
   signalIdentity: 'silo/v1/signal-identity',
   serverInfo: 'silo/v1/server-info',
+  lanLink: 'silo/v1/lan-link',
 } as const;
 
 export type SigningPurpose = keyof typeof SIGNING_CONTEXT;
@@ -119,4 +120,13 @@ export function parseRecoveryKey(text: string): Uint8Array {
 /** Signed by the server's own identity key over its address list (a JSON string). */
 export function serverInfoPayload(info: string): Uint8Array {
   return signingPayload('serverInfo', [info]);
+}
+
+/**
+ * Signed by each device when two devices link up on a local network. It covers
+ * both sides' fresh key-exchange keys and device ids, so the link can't be
+ * relayed or replayed.
+ */
+export function lanLinkPayload(initiatorEphemeral: string, responderEphemeral: string, initiatorDevice: string, responderDevice: string): Uint8Array {
+  return signingPayload('lanLink', [initiatorEphemeral, responderEphemeral, initiatorDevice, responderDevice]);
 }

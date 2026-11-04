@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { generateDeviceKeyPair, sign, type DeviceKeyPair } from '@silo/protocol';
 import { MemoryStateStore, SignalDevice } from '@silo/signal';
-import { app, bearer, db, invite, signup } from './helpers/setup.js';
+import { app, bearer, db, invite, pub, signup } from './helpers/setup.js';
 
 interface Dev {
   key: DeviceKeyPair;
@@ -101,7 +101,15 @@ describe('encrypted channel messages', () => {
   it('lists member devices for key handover, and hides servers from non-members', async () => {
     const { spaceId, channelId, owner, rest } = await group('bob');
     const devices = (await app.inject({ method: 'GET', url: `/v1/spaces/${spaceId}/devices`, headers: owner.headers })).json().devices;
-    expect(devices).toEqual([{ userId: rest[0]!.userId, deviceId: rest[0]!.deviceId, signalDeviceId: rest[0]!.signalDeviceId }]);
+    expect(devices).toEqual([
+      {
+        userId: rest[0]!.userId,
+        username: 'bob',
+        deviceId: rest[0]!.deviceId,
+        signalDeviceId: rest[0]!.signalDeviceId,
+        publicKey: pub(rest[0]!.key),
+      },
+    ]);
 
     const eve = await newDevUser('eve');
     expect((await app.inject({ method: 'GET', url: `/v1/spaces/${spaceId}/devices`, headers: eve.headers })).statusCode).toBe(404);

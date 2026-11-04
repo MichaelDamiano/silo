@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { generateDeviceKeyPair, sign, type DeviceKeyPair } from '@silo/protocol';
+import { generateDeviceKeyPair, sign, toBase64Url, type DeviceKeyPair } from '@silo/protocol';
 import { MemoryStateStore, SignalDevice } from '@silo/signal';
 import { app, bearer, db, invite, login, signup } from './helpers/setup.js';
 
@@ -97,7 +97,7 @@ describe('key publishing', () => {
     const count = async () => (await app.inject({ method: 'GET', url: '/v1/keys/count', headers: bob.headers })).json().count;
     const before = await count();
     const list = (await app.inject({ method: 'GET', url: `/v1/users/${bob.userId}/devices`, headers: alice.headers })).json();
-    expect(list.devices).toEqual([{ deviceId: bob.deviceId, signalDeviceId: 1 }]);
+    expect(list.devices).toEqual([{ deviceId: bob.deviceId, signalDeviceId: 1, publicKey: toBase64Url(bob.key.publicKey) }]);
     expect(await count()).toBe(before);
     const none = await app.inject({ method: 'GET', url: `/v1/users/${bob.userId}/keys?devices=${alice.deviceId}`, headers: alice.headers });
     expect(none.json().devices).toEqual([]);

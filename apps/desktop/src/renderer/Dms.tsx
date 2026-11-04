@@ -53,6 +53,7 @@ export function DmPage({ peerUserId, peerUsername, onSent }: { peerUserId: strin
               {m.from === 'me' ? 'You' : conv.peerUsername} · {new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </div>
             <div className="msg-text">{m.error ?? m.text}</div>
+            {m.note && <div className="msg-note">{m.note}</div>}
           </li>
         ))}
         {conv && conv.messages.length === 0 && <li className="muted">No messages yet. Say hello.</li>}

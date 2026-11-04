@@ -22,7 +22,7 @@ export function ConnectionSettings({ signedIn }: { signedIn: boolean }) {
   useEffect(() => {
     void window.silo.connection({ kind: 'get' }).then((r) => r.ok && apply(r.value));
     const off = window.silo.onEvent((e) => {
-      if (e.type === 'connection') void window.silo.connection({ kind: 'get' }).then((r) => r.ok && setView(r.value));
+      if (e.type === 'connection' || e.type === 'lan') void window.silo.connection({ kind: 'get' }).then((r) => r.ok && setView(r.value));
     });
     return () => {
       off();
@@ -114,6 +114,28 @@ export function ConnectionSettings({ signedIn }: { signedIn: boolean }) {
           {saved && <span className="muted">Saved.</span>}
         </div>
       </form>
+      {signedIn && view && (
+        <div className="lan">
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={view.lan.enabled}
+              disabled={busy}
+              onChange={(e) => void act(() => window.silo.connection({ kind: 'setLan', enabled: e.target.checked }))}
+            />{' '}
+            Find people on this local network, so messages still get through when the server can’t be reached
+          </label>
+          <p className="muted">
+            Other Silo devices on the same Wi-Fi or network can see that a Silo device is here, but not whose. Only devices of people you
+            share a server with can link up, and messages stay end-to-end encrypted.
+          </p>
+          {view.lan.enabled && (
+            <p data-testid="lan-peers">
+              {view.lan.peers.length ? `Linked on this network: ${view.lan.peers.join(', ')}` : 'No one you know is on this network right now.'}
+            </p>
+          )}
+        </div>
+      )}
       {error && <div className="error">{error}</div>}
     </div>
   );
