@@ -1,6 +1,6 @@
 # Build from the repository root: docker build -f apps/server/Dockerfile .
 # Base images are pinned by digest so a rebuild uses exactly the same bytes; Dependabot proposes updates.
-FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS build
+FROM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS build
 WORKDIR /app
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -14,7 +14,7 @@ COPY packages/protocol packages/protocol
 COPY apps/server apps/server
 RUN npm run build -w @silo/protocol && npm run build -w @silo/server
 
-FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+FROM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
