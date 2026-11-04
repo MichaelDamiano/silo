@@ -1,0 +1,13 @@
+name: Silo CodeQL config
+
+# Tests never ship, and they check files they just wrote themselves.
+paths-ignore:
+  - "**/test/**"
+  - "**/*.test.ts"
+
+query-filters:
+  # Flags every check of a request header that decides whether to reject the
+  # request, which is what an auth check is. requireAuth in apps/server/src/auth.ts
+  # only rejects early on a malformed header; a well-formed one is still looked up.
+  - exclude:
+      id: js/user-controlled-bypass

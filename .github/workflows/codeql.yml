@@ -25,6 +25,7 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
       # Code scanning results can only be uploaded to public repositories (or private
       # ones with GitHub Code Security). Elsewhere we keep the results local and fail
       # the job ourselves when CodeQL finds anything.
