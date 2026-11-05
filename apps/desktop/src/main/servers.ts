@@ -88,12 +88,22 @@ export class ServerDirectory {
    * Connects to the server behind an address. The server must prove it holds the
    * identity key we pinned before; a new server's key is pinned now.
    */
-  async connect(address: string, onSwitch?: (endpoint: string, viaTor: boolean) => void): Promise<{ transport: Transport; server: KnownServer }> {
+  async connect(
+    address: string,
+    onSwitch?: (endpoint: string, viaTor: boolean) => void,
+    /** The server key from an invite. A server answering with any other key is refused before it's pinned. */
+    expectKey?: string,
+  ): Promise<{ transport: Transport; server: KnownServer }> {
     const base = normalizeServerUrl(address);
     const known = this.find(base);
     const transport = new Transport(known ? this.addressesFor(known, base) : [base], this.tor, onSwitch);
     try {
       const info = await this.fetchInfo(transport);
+      if (expectKey && info.serverKey !== expectKey) {
+        throw new ServerIdentityError(
+          'This server’s identity doesn’t match the one in your invite, so Silo refused to connect. Check the address, or ask for a new invite. Someone may be intercepting the connection.',
+        );
+      }
       const server = await this.accept(info, known);
       // Remember the address that was typed in too, so a different server answering there later is caught.
       if (!server.endpoints.includes(base) && !server.added.includes(base)) {
