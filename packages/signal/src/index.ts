@@ -3,6 +3,7 @@ import { signalIdentityPayload, type DeviceBundle, type UploadKeysRequest } from
 import { verify as verifyEd25519 } from '@silo/protocol';
 
 export { formatSafetyNumber, safetyNumber } from './safety.js';
+export { issueSenderCertificate, sealedSenderKeys } from './certificates.js';
 
 /**
  * Everything one device needs to run the Signal protocol, kept as plain data so it
@@ -69,9 +70,12 @@ export interface Target {
   bundle?: DeviceBundle;
 }
 
+/** Envelope type for sealed-sender messages, next to Signal's own 2 (whisper) and 3 (pre-key). */
+export const SEALED = 6 as const;
+
 export interface OutgoingCopy {
   deviceId: string;
-  type: 2 | 3;
+  type: 2 | 3 | typeof SEALED;
   body: string;
 }
 
@@ -275,6 +279,70 @@ export class SignalDevice {
       } catch (err) {
         throw this.translate(err, envelope.senderUserId);
       }
+    });
+  }
+
+  /**
+   * Sealed sender: encrypts for each target device so that only the recipient can
+   * tell who sent it. The certificate, issued by the server, proves to the
+   * recipient which account and device we are.
+   */
+  sealedEncrypt(plaintext: Uint8Array, targets: Target[], senderCertificate: string): Promise<OutgoingCopy[]> {
+    return this.run(async () => {
+      const me = this.requireSelf();
+      const stores = this.stores();
+      const cert = S.SenderCertificate.deserialize(unb64(senderCertificate));
+      const out: OutgoingCopy[] = [];
+      for (const t of targets) {
+        const address = S.ProtocolAddress.new(t.userId, t.signalDeviceId);
+        if (!(addrKey(address) in this.state.sessions)) {
+          if (!t.bundle) throw new Error(`no session or key bundle for device ${t.deviceId}`);
+          await this.startSession(t.userId, t.bundle, address, me, stores);
+        }
+        try {
+          const body = await S.sealedSenderEncryptMessage(new Uint8Array(plaintext), address, cert, stores.session, stores.identity);
+          out.push({ deviceId: t.deviceId, type: SEALED, body: b64(body) });
+        } catch (err) {
+          throw this.translate(err, t.userId);
+        }
+      }
+      return out;
+    });
+  }
+
+  /**
+   * Opens a sealed-sender envelope. libsignal checks the sender certificate against
+   * the server's trust root and that it hasn't expired, and the sender's identity
+   * against the session, so the sender named here is the one who encrypted it.
+   */
+  sealedDecrypt(body: string, trustRoot: string): Promise<{ senderUserId: string; senderSignalDeviceId: number; plaintext: Uint8Array }> {
+    return this.run(async () => {
+      const me = this.requireSelf();
+      const stores = this.stores();
+      let res: S.SealedSenderDecryptionResult;
+      try {
+        res = await S.sealedSenderDecryptMessage(
+          unb64(body),
+          S.PublicKey.deserialize(unb64(trustRoot)),
+          Date.now(),
+          null,
+          me.name(),
+          me.deviceId(),
+          stores.session,
+          stores.identity,
+          stores.preKey,
+          stores.signedPreKey,
+          stores.kyberPreKey,
+        );
+      } catch (err) {
+        if (err instanceof S.LibSignalErrorBase && err.code === S.ErrorCode.UntrustedIdentity) {
+          // The certificate names the sender even when their key changed.
+          const usmc = await S.sealedSenderDecryptToUsmc(unb64(body), stores.identity).catch(() => null);
+          throw new IdentityChangedError(usmc?.senderCertificate().senderUuid() ?? 'unknown');
+        }
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+      return { senderUserId: res.senderUuid(), senderSignalDeviceId: res.deviceId(), plaintext: res.message() };
     });
   }
 
