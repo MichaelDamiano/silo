@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ACCESS_KEY_HEADER,
+  AccessKey,
+  SEALED_TYPE,
+  SealedMismatch,
+  SenderCertificateResponse,
   ChannelMessageList,
   ChannelMessagePayload,
   DirectMessagePayload,
@@ -14,6 +19,7 @@ import {
   type DeviceBundle,
   type Envelope,
   type LanFrame,
+  type SealedEnvelope,
 } from '@silo/protocol';
 import { IdentityChangedError, MissingSenderKeyError, SignalDevice, safetyNumber, type StateStore, type Target } from '@silo/signal';
 import { z } from 'zod';
@@ -36,6 +42,18 @@ interface Directory {
   devices: Record<string, PeerDevice>;
   /** Member devices of each server, by space id. */
   spaces: Record<string, string[]>;
+}
+
+/** How long before a sender certificate expires we fetch a new one. */
+const CERTIFICATE_MARGIN_MS = 60 * 60 * 1000;
+
+/**
+ * Sealed sender state. People's access keys arrive inside their messages; with one,
+ * our messages to them go sealed, so the server doesn't learn who sent them.
+ */
+interface Sealed {
+  peers: Record<string, string>;
+  certificate?: { certificate: string; expiresAt: string };
 }
 
 /** Messages that only went over the local network, to send through the server once it's back. */
@@ -85,6 +103,10 @@ export interface Api {
   request<T>(method: 'GET' | 'POST' | 'PUT', path: string, body: unknown, parse: (v: unknown) => T): Promise<T>;
   /** Signs with this device's Ed25519 login key. */
   sign(payload: Uint8Array): string;
+  /** POSTs without signing in, on a connection no other request shares. */
+  anonymous<T>(path: string, body: unknown, headers: Record<string, string>, parse: (v: unknown) => T): Promise<T>;
+  /** The server's sealed sender trust root, from its signed identity, if it publishes one. */
+  sealedSenderRoot(): string | undefined;
 }
 
 /**
@@ -105,6 +127,9 @@ export class Messenger {
   private lan?: LanNode;
   /** People this account blocked. Their direct messages are dropped and their channel messages hidden. */
   private blocked = new Set<string>();
+  private sealed: Sealed = { peers: {} };
+  /** Our account's access key, which our messages hand to the people we write to. */
+  private accessKey?: string;
 
   private constructor(
     private readonly vault: Vault,
@@ -122,7 +147,9 @@ export class Messenger {
     m.channels = channels?.deviceId === api.deviceId ? channels : { deviceId: api.deviceId, cursor: 0, out: {}, history: {}, pending: [] };
     m.directory = (await vault.read<Directory>('directory')) ?? m.directory;
     m.outbox = (await vault.read<OutboxItem[]>('outbox')) ?? [];
+    m.sealed = (await vault.read<Sealed>('sealed')) ?? m.sealed;
     await m.publishKeys();
+    await m.refreshAccessKey().catch(() => undefined);
     m.connect();
     await m.sync();
     return m;
@@ -276,6 +303,7 @@ export class Messenger {
         await this.syncChannels();
       } while (this.again);
       await this.topUpPreKeys();
+      if (this.api.sealedSenderRoot()) await this.certificate().catch(() => undefined);
       await this.flushOutbox();
       await this.refreshDirectory().catch(() => undefined);
     })()
@@ -290,18 +318,78 @@ export class Messenger {
   }
 
   private async receiveEnvelope(e: Envelope, touched: Set<string>) {
+    if (e.type === SEALED_TYPE) return this.receiveSealed(e, touched);
+    let plaintext: Uint8Array | undefined;
+    let failure: unknown;
+    try {
+      plaintext = await this.signal.decrypt(e);
+    } catch (err) {
+      failure = err;
+    }
+    await this.receivePlaintext(e, plaintext, failure, touched);
+  }
+
+  /**
+   * A sealed message: the sender is only named inside, by a certificate our server
+   * signed. Without a trust root, or if it can't be opened, nobody can be told about
+   * it, so it is dropped; showing an error would let anyone with our key spam pop-ups.
+   */
+  private async receiveSealed(e: SealedEnvelope, touched: Set<string>) {
+    const root = this.api.sealedSenderRoot();
+    if (!root) return;
+    let opened: Awaited<ReturnType<SignalDevice['sealedDecrypt']>>;
+    try {
+      opened = await this.signal.sealedDecrypt(e.body, root);
+    } catch (err) {
+      // Who it claims to be from isn't proven here, so only a name we already know is shown.
+      const name = err instanceof IdentityChangedError ? this.knownUsername(err.userId) : undefined;
+      if (name && !this.blocked.has((err as IdentityChangedError).userId)) {
+        await this.receivePlaintext(
+          { id: e.id, senderUserId: (err as IdentityChangedError).userId, senderUsername: name, senderSignalDeviceId: 0, receivedAt: e.receivedAt },
+          undefined,
+          err,
+          touched,
+        );
+      }
+      return;
+    }
+    const sender = {
+      id: e.id,
+      senderUserId: opened.senderUserId,
+      senderUsername: opened.senderUsername ?? this.knownUsername(opened.senderUserId) ?? 'unknown',
+      senderSignalDeviceId: opened.senderSignalDeviceId,
+      receivedAt: e.receivedAt,
+    };
+    await this.receivePlaintext(sender, opened.plaintext, undefined, touched);
+  }
+
+  /** A name for someone from what this device already knows, without asking the server. */
+  private knownUsername(userId: string): string | undefined {
+    return (
+      this.history.conversations[userId]?.peerUsername ?? Object.values(this.directory.devices).find((d) => d.userId === userId)?.username
+    );
+  }
+
+  private async receivePlaintext(
+    e: { id: string; senderUserId: string; senderUsername: string; senderSignalDeviceId: number; receivedAt: string },
+    plaintext: Uint8Array | undefined,
+    failure: unknown,
+    touched: Set<string>,
+  ) {
     const fromMe = e.senderUserId === this.api.userId;
     let peer = { id: e.senderUserId, name: e.senderUsername };
     let msg: DmMessage;
     try {
-      const payload = PairwisePayload.parse(JSON.parse(new TextDecoder().decode(await this.signal.decrypt(e))));
+      if (!plaintext) throw failure;
+      const payload = PairwisePayload.parse(JSON.parse(new TextDecoder().decode(plaintext)));
       if (payload.kind === 'senderKey') {
         // A member handing us their key for a channel. The pairwise session proves which device it's from.
         await this.signal.processSenderKeyDistribution(e.senderUserId, e.senderSignalDeviceId, payload.skdm);
         return;
       }
-      // Blocked people's messages can still arrive over the local network; drop them here too.
+      // Blocked people's messages can still arrive over the local network or sealed; drop them here too.
       if (!fromMe && this.blocked.has(e.senderUserId)) return;
+      if (!fromMe && payload.accessKey) await this.learnAccessKey(e.senderUserId, payload.accessKey);
       // A copy from one of our own devices belongs to the conversation it was sent in.
       if (fromMe) peer = { id: payload.peerUserId, name: payload.peerUsername };
       msg = { id: payload.id, from: fromMe ? 'me' : 'them', text: payload.text, sentAt: payload.sentAt };
@@ -320,6 +408,33 @@ export class Messenger {
     }
     this.store(peer.id, peer.name, msg);
     touched.add(peer.id);
+  }
+
+  private async learnAccessKey(userId: string, key: string) {
+    if (this.sealed.peers[userId] === key || !AccessKey.safeParse(key).success) return;
+    this.sealed.peers[userId] = key;
+    await this.vault.write('sealed', this.sealed);
+  }
+
+  private async refreshAccessKey() {
+    this.accessKey = (await this.api.request('GET', '/v1/access-key', undefined, (v) => z.object({ accessKey: AccessKey }).parse(v))).accessKey;
+  }
+
+  /**
+   * Replaces our access key, after blocking someone. Everyone else gets the new one
+   * with our next message to them; until then they send to us the normal way.
+   */
+  async rotateAccessKey() {
+    this.accessKey = (await this.api.request('POST', '/v1/access-key/rotate', {}, (v) => z.object({ accessKey: AccessKey }).parse(v))).accessKey;
+  }
+
+  /** A sender certificate for sealed messages, fetched ahead of time rather than just before a send. */
+  private async certificate(): Promise<string> {
+    const c = this.sealed.certificate;
+    if (c && Date.parse(c.expiresAt) - Date.now() > CERTIFICATE_MARGIN_MS) return c.certificate;
+    this.sealed.certificate = await this.api.request('GET', '/v1/certificate', undefined, (v) => SenderCertificateResponse.parse(v));
+    await this.vault.write('sealed', this.sealed);
+    return this.sealed.certificate.certificate;
   }
 
   /** Something arrived from a linked device on the local network. Who sent it comes from the link, not the frame. */
@@ -349,6 +464,8 @@ export class Messenger {
   /** Remembers every device we share a server with, and their login keys, for use when the server is unreachable. */
   private async refreshDirectory(force = false) {
     if (!force && Date.now() - this.directoryAt < DIRECTORY_REFRESH_MS) return;
+    // Another of our devices may have replaced the access key.
+    await this.refreshAccessKey().catch(() => undefined);
     const { spaces } = await this.api.request('GET', '/v1/spaces', undefined, (v) => SpaceList.parse(v));
     const next: Directory = { devices: {}, spaces: {} };
     for (const space of spaces) {
@@ -604,6 +721,7 @@ export class Messenger {
       peerUsername,
       sentAt: new Date().toISOString(),
       text: DirectMessagePayload.shape.text.parse(text.trim()),
+      ...(this.accessKey ? { accessKey: this.accessKey } : {}),
     };
     let note: string | undefined;
     try {
@@ -621,6 +739,18 @@ export class Messenger {
   private async sendDmOnline(payload: DirectMessagePayload) {
     const { peerUserId, peerUsername } = payload;
     const plaintext = new TextEncoder().encode(JSON.stringify(payload));
+    const key = this.sealed.peers[peerUserId];
+    if (key && this.api.sealedSenderRoot()) {
+      try {
+        if (await this.sendSealed(peerUserId, key, plaintext)) {
+          await this.copyToOwnDevices(plaintext);
+          return;
+        }
+      } catch (err) {
+        // Anything but being offline: try the normal way below.
+        if (err instanceof UnreachableError) throw err;
+      }
+    }
     for (let attempt = 0; ; attempt++) {
       const targets = [...(await this.targetsFor(peerUserId)), ...(await this.targetsFor(this.api.userId))];
       if (!targets.some((t) => t.userId === peerUserId)) {
@@ -632,6 +762,66 @@ export class Messenger {
         break;
       } catch (err) {
         // Someone added or removed a device since we last looked; refresh and try once more.
+        if (err instanceof HttpStatusError && err.status === 409 && MismatchedDevices.safeParse(err.body).success && attempt === 0) continue;
+        throw err;
+      }
+    }
+  }
+
+  /**
+   * Sends sealed: without signing in, on a connection of its own. Their device list
+   * comes from the directory we refresh in the background, so nothing signed in is
+   * asked for right before the send, except keys for a device we've never written to.
+   * Returns false if they've replaced their access key, so we should send normally.
+   */
+  private async sendSealed(peerUserId: string, key: string, plaintext: Uint8Array): Promise<boolean> {
+    let devices = this.knownDevices(peerUserId);
+    if (!devices.length) devices = (await this.api.request('GET', `/v1/users/${peerUserId}/devices`, undefined, (v) => DeviceList.parse(v))).devices;
+    const certificate = await this.certificate();
+    for (let attempt = 0; ; attempt++) {
+      const messages = await this.signal.sealedEncrypt(plaintext, await this.targetsFor(peerUserId, devices), certificate);
+      try {
+        await this.api.anonymous(`/v1/sealed/${peerUserId}/messages`, { messages }, { [ACCESS_KEY_HEADER]: key }, () => null);
+        return true;
+      } catch (err) {
+        if (err instanceof HttpStatusError && err.status === 401) {
+          delete this.sealed.peers[peerUserId];
+          await this.vault.write('sealed', this.sealed);
+          return false;
+        }
+        const mismatch = err instanceof HttpStatusError && err.status === 409 ? SealedMismatch.safeParse(err.body) : undefined;
+        if (mismatch?.success && attempt === 0) {
+          devices = mismatch.data.devices;
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  /** Someone's devices as of the last directory refresh, leaving out this one. */
+  private knownDevices(userId: string): { deviceId: string; signalDeviceId: number }[] {
+    return Object.values(this.directory.devices)
+      .filter((d) => d.userId === userId && d.deviceId !== this.api.deviceId)
+      .map((d) => ({ deviceId: d.deviceId, signalDeviceId: d.signalDeviceId }));
+  }
+
+  /**
+   * A sealed send carries no copies for our other devices, so they get theirs
+   * separately. That send is signed in, so the server sees that we wrote something
+   * (not to whom); see docs/sealed-sender.md.
+   */
+  private async copyToOwnDevices(plaintext: Uint8Array) {
+    // Our devices are in the directory too, as members of our servers.
+    const known = this.knownDevices(this.api.userId);
+    for (let attempt = 0; ; attempt++) {
+      const targets = await this.targetsFor(this.api.userId, attempt === 0 && known.length ? known : undefined);
+      if (!targets.length) return;
+      const messages = await this.signal.encrypt(plaintext, targets);
+      try {
+        await this.api.request('POST', '/v1/messages', { recipientUserId: this.api.userId, messages }, () => null);
+        return;
+      } catch (err) {
         if (err instanceof HttpStatusError && err.status === 409 && MismatchedDevices.safeParse(err.body).success && attempt === 0) continue;
         throw err;
       }

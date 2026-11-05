@@ -188,3 +188,27 @@ describe('ServerDirectory', () => {
     await expect(dir.connect('http://chat.example.com')).rejects.toThrow(/https/);
   });
 });
+
+describe('isolated requests', () => {
+  it('never share a connection, so the server cannot link them to signed-in requests', async () => {
+    const ports: Record<string, number[]> = { '/a': [], '/b': [] };
+    const srv = http.createServer((req, res) => {
+      ports[req.url!]!.push(req.socket.remotePort!);
+      res.end('{}');
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    closers.push(() => {
+      srv.closeAllConnections();
+      srv.close();
+    });
+    const t = new Transport([`http://127.0.0.1:${(srv.address() as AddressInfo).port}`], DEFAULT_TOR);
+    closers.push(() => t.close());
+    for (let i = 0; i < 3; i++) {
+      await (await t.request('/a', {})).text();
+      await (await t.request('/b', { method: 'POST', body: '{}', isolated: true })).text();
+    }
+    // Each isolated request came on a connection of its own, used by nothing else.
+    expect(new Set(ports['/b']).size).toBe(3);
+    expect(ports['/b']!.some((p) => ports['/a']!.includes(p))).toBe(false);
+  });
+});

@@ -67,13 +67,23 @@ async function onionEndpoint(file?: string): Promise<string | undefined> {
  * server's identity key. Clients pin that key the first time and use the list to
  * fail over when the address they normally use is blocked or down.
  */
-export async function serverInfoRoutes(app: FastifyInstance, opts: { db: Db; config: Config }) {
-  const identity = await serverIdentity(opts.db, opts.config.serverKeyFile);
+export async function serverInfoRoutes(
+  app: FastifyInstance,
+  opts: { config: Config; identity: { publicKey: string; secretKey: Uint8Array }; sealedSenderRoot: string },
+) {
+  const { identity } = opts;
   app.get('/v1/server-info', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request): Promise<SignedServerInfo> => {
     const { nonce } = z.object({ nonce: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/) }).parse(request.query);
     const onion = await onionEndpoint(opts.config.onionHostnameFile);
     const endpoints = [...new Set([...opts.config.publicUrls, ...(onion ? [onion] : [])])];
-    const info: ServerInfo = { v: 1, serverKey: identity.publicKey, endpoints, issuedAt: new Date().toISOString(), nonce };
+    const info: ServerInfo = {
+      v: 1,
+      serverKey: identity.publicKey,
+      endpoints,
+      issuedAt: new Date().toISOString(),
+      nonce,
+      sealedSenderRoot: opts.sealedSenderRoot,
+    };
     const text = JSON.stringify(info);
     return { info: text, signature: sign(serverInfoPayload(text), identity.secretKey) };
   });

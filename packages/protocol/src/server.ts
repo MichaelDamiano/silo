@@ -34,6 +34,8 @@ export const ServerInfo = z.object({
   issuedAt: z.iso.datetime(),
   /** Echoes the client's nonce, so a recorded answer can't be replayed. */
   nonce: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
+  /** The key that sender certificates chain to, for sealed sender (standard base64, a Curve25519 public key). */
+  sealedSenderRoot: z.string().regex(/^[A-Za-z0-9+/]{44}$/).optional(),
 });
 
 export const SignedServerInfo = z.object({ info: z.string().max(16 * 1024), signature: Signature });

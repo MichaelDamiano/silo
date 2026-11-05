@@ -24,7 +24,7 @@ Bugs in libsignal itself should go to Signal (security@signal.org).
 The server stores and relays only ciphertext. It does see:
 
 - usernames and server membership
-- which device sent a message to which account or channel, and when
+- which device sent a message to which account or channel, and when, except the sender of a sealed direct message (see [docs/sealed-sender.md](docs/sealed-sender.md))
 - message sizes
 - whom each person has blocked
 - the text of reports, as the reporter chose to share it

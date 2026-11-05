@@ -11,6 +11,8 @@ export interface KnownServer {
   /** Addresses added by hand, for example an onion address a friend sent. */
   added: string[];
   issuedAt: string;
+  /** The key sender certificates chain to, from the same signed answer as the addresses. */
+  sealedSenderRoot?: string;
 }
 
 interface Saved {
@@ -175,11 +177,18 @@ export class ServerDirectory {
       if (info.issuedAt >= existing.issuedAt) {
         existing.endpoints = info.endpoints;
         existing.issuedAt = info.issuedAt;
+        if (info.sealedSenderRoot) existing.sealedSenderRoot = info.sealedSenderRoot;
       }
       await this.save();
       return existing;
     }
-    const fresh: KnownServer = { serverKey: info.serverKey, endpoints: info.endpoints, added: [], issuedAt: info.issuedAt };
+    const fresh: KnownServer = {
+      serverKey: info.serverKey,
+      endpoints: info.endpoints,
+      added: [],
+      issuedAt: info.issuedAt,
+      ...(info.sealedSenderRoot ? { sealedSenderRoot: info.sealedSenderRoot } : {}),
+    };
     this.saved.servers.push(fresh);
     await this.save();
     return fresh;

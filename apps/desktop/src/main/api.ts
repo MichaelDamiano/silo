@@ -58,7 +58,7 @@ const ChannelActionSchema = z.discriminatedUnion('kind', [
 
 export { normalizeServerUrl } from './servers.js';
 
-type Init = { method?: string; headers?: Record<string, string>; body?: string };
+type Init = { method?: string; headers?: Record<string, string>; body?: string; isolated?: boolean };
 
 async function call<T>(net: Transport, path: string, init: Init, parse: (v: unknown) => T): Promise<T> {
   const res = await net.request(path, {
@@ -136,6 +136,9 @@ export class SiloClient {
           request: (method, path, body, parse) =>
             this.authed(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, parse),
           sign: (payload) => sign(payload, this.key.secretKey),
+          // Never signed in, and on a connection of its own, so the server can't tell who sent it.
+          anonymous: (path, body, headers, parse) => call(s.net, path, { method: 'POST', body: JSON.stringify(body), headers, isolated: true }, parse),
+          sealedSenderRoot: () => s.server.sealedSenderRoot,
         },
         this.emit,
       );

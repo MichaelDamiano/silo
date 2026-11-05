@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { generateDeviceKeyPair, sign, toBase64Url, type DeviceBundle } from '@silo/protocol';
 import { randomUUID } from 'node:crypto';
-import { IdentityChangedError, MemoryStateStore, MissingSenderKeyError, SignalDevice, formatSafetyNumber, safetyNumber } from './index.js';
+import { IdentityChangedError, MemoryStateStore, MissingSenderKeyError, SEALED, SignalDevice, formatSafetyNumber, issueSenderCertificate, safetyNumber, sealedSenderKeys } from './index.js';
 
 const text = (s: string) => new TextEncoder().encode(s);
 const read = (b: Uint8Array) => new TextDecoder().decode(b);
@@ -195,5 +195,46 @@ describe('safety numbers', () => {
     const [again] = await reinstalled.dev.encrypt(text('hello again'), [{ ...bob, bundle: bob.bundle() }]);
     expect(read(await bob.dev.decrypt({ senderUserId: 'alice-id', senderSignalDeviceId: 1, ...again! }))).toBe('hello again');
     expect(bob.dev.identityKeysOf('alice-id', [1])).toEqual([reinstalled.dev.identityKey]);
+  });
+});
+
+describe('sealed sender', () => {
+  const keys = sealedSenderKeys(new Uint8Array(32).fill(7));
+  const certFor = (d: { dev: SignalDevice }, userId: string, n: number, expiresAt = Date.now() + 3600_000) =>
+    issueSenderCertificate(keys, { userId, username: 'alice', signalDeviceId: n, identityKey: d.dev.identityKey, expiresAt });
+  const alice = 'a0000000-0000-4000-8000-000000000001';
+  const bobId = 'b0000000-0000-4000-8000-000000000002';
+
+  it('lets only the recipient learn who sent a message', async () => {
+    const a = await makeDevice(alice, 1);
+    const b = await makeDevice(bobId, 1);
+    const [m] = await a.dev.sealedEncrypt(text('hi, sealed'), [{ ...b, userId: bobId, bundle: b.bundle() }], certFor(a, alice, 1));
+    expect(m!.type).toBe(SEALED);
+    const out = await b.dev.sealedDecrypt(m!.body, keys.trustRoot);
+    expect(out).toMatchObject({ senderUserId: alice, senderUsername: 'alice', senderSignalDeviceId: 1 });
+    expect(read(out.plaintext)).toBe('hi, sealed');
+    // A second message on the same session works too.
+    const [m2] = await a.dev.sealedEncrypt(text('again'), [{ ...b, userId: bobId }], certFor(a, alice, 1));
+    expect(read((await b.dev.sealedDecrypt(m2!.body, keys.trustRoot)).plaintext)).toBe('again');
+  });
+
+  it('refuses a certificate from another server, an expired one, or one for someone else’s key', async () => {
+    const a = await makeDevice(alice, 1);
+    const b = await makeDevice(bobId, 1);
+    const other = sealedSenderKeys(new Uint8Array(32).fill(9));
+    const [m] = await a.dev.sealedEncrypt(text('x'), [{ ...b, userId: bobId, bundle: b.bundle() }], certFor(a, alice, 1));
+    await expect(b.dev.sealedDecrypt(m!.body, other.trustRoot)).rejects.toThrow();
+
+    const a2 = await makeDevice(alice, 1);
+    const b2 = await makeDevice(bobId, 1);
+    const [old] = await a2.dev.sealedEncrypt(text('x'), [{ ...b2, userId: bobId, bundle: b2.bundle() }], certFor(a2, alice, 1, Date.now() - 1000));
+    await expect(b2.dev.sealedDecrypt(old!.body, keys.trustRoot)).rejects.toThrow();
+
+    // Mallory gets a valid certificate for herself but claims to be alice.
+    const a3 = await makeDevice(alice, 1);
+    const b3 = await makeDevice(bobId, 1);
+    const mallory = await makeDevice('c0000000-0000-4000-8000-000000000003', 1);
+    const [forged] = await a3.dev.sealedEncrypt(text('x'), [{ ...b3, userId: bobId, bundle: b3.bundle() }], certFor(mallory, alice, 1));
+    await expect(b3.dev.sealedDecrypt(forged!.body, keys.trustRoot)).rejects.toThrow();
   });
 });
