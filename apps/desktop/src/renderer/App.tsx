@@ -130,8 +130,25 @@ function AuthForm({
       <input id="server" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} required />
       {mode === 'signup' && (
         <>
-          <label htmlFor="invite">Invite code</label>
-          <input id="invite" value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} required autoComplete="off" />
+          <label htmlFor="invite">Invite</label>
+          <input
+            id="invite"
+            value={inviteCode}
+            onChange={(e) => {
+              setInviteCode(e.target.value);
+              // A full invite names the server, so fill in its address too.
+              const address = /^silo:[^:]+:[^:]+:(https?:\/\/.+)$/.exec(e.target.value.trim())?.[1];
+              if (address) setServerUrl(address);
+            }}
+            required
+            autoComplete="off"
+          />
+          {inviteCode.trim() && !inviteCode.trim().startsWith('silo:') && (
+            <p className="muted">
+              This is a bare code, without the server’s key. Silo will trust whichever server answers at this address the first time. A full
+              invite starts with silo: and checks the server for you.
+            </p>
+          )}
         </>
       )}
       {mode !== 'login' && (
@@ -385,7 +402,10 @@ function AccountScreen({
       )}
 
       <h2>Invite someone to Silo</h2>
-      <p className="muted">New people need a one-time code to create an account. To add them to a server, send them a server invite too.</p>
+      <p className="muted">
+        New people need a one-time invite to create an account. It includes this server’s key, so their app can tell if someone else
+        answers instead. To add them to a server, send them a server invite too.
+      </p>
       <div className="row">
         <button disabled={busy} onClick={() => void run(() => window.silo.createAccountInvite(), setAccountInvite)}>
           Create sign-up code

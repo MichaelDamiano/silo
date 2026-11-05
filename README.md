@@ -135,7 +135,7 @@ npm run dev -w @silo/server
 npm run invite:create -w @silo/server -- --uses 5 --hours 72
 ```
 
-Then start the desktop app and join with that code at `http://localhost:8443`:
+Then start the desktop app and paste the `Invite: silo:…` line it printed. A full invite carries the server's identity key, so the app refuses to sign up with any other server answering at that address. Set `PUBLIC_URLS` to have the address included too:
 
 ```sh
 npm run dev -w @silo/desktop
