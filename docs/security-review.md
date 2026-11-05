@@ -90,7 +90,7 @@ These are the threats the project owner named, with where to look.
 | Threat | What Silo does | Code |
 | --- | --- | --- |
 | Account takeover | No passwords. Signing in is a challenge signed by a device key. New devices need approval from an existing device, which compares a fingerprint. The recovery key revokes **all** devices and sessions. Each device keeps at most 5 sessions | `apps/server/src/routes/accounts.ts`, `devices.ts`, `auth.ts` |
-| Server or network impersonation | The server's identity key is pinned on first contact. It signs the address list (`serverInfo` payload, with a client nonce) | `apps/server/src/routes/server-info.ts`, `apps/desktop/src/main/servers.ts` |
+| Server or network impersonation | Sign-up invites carry the server's identity key, which is checked before first contact. Otherwise the key is pinned on first contact. It signs the address list (`serverInfo` payload, with a client nonce) | `apps/server/src/routes/server-info.ts`, `apps/desktop/src/main/servers.ts` |
 | Reading messages (server, network, other members) | libsignal PQXDH plus Double Ratchet for DMs, sender keys for channels. A key is rotated when a member device leaves | `packages/signal/src/index.ts`, `apps/desktop/src/main/messenger.ts` |
 | A server adding a fake device or key | The server never replaces a device's identity key (`PUT /v1/keys` refuses). Safety numbers cover every device on both sides, and the app warns when a verified number changes. A changed key blocks messages until the user accepts it | `packages/signal/src/safety.ts`, `apps/desktop/src/main/safety.ts` |
 | Malware and code injection into the app | Sandboxed renderer, context isolation, strict CSP, the `app://` scheme with containment of the requested path, no navigation, pop-ups or webviews, and no network access from the renderer. Release builds set Electron fuses (no RunAsNode, NODE_OPTIONS or inspect, asar integrity, only load from asar) and refuse debugger switches | `apps/desktop/src/main/main.ts`, `app-protocol.ts`, `electron-builder.yml` |
@@ -170,8 +170,10 @@ None of these needs a report, but ideas for fixing them are welcome.
 - Unsigned release builds, and no code signing or notarization yet.
 - Linux has no embedded asar integrity check. Electron doesn't support it there.
 - The server identity key is in a file, not an HSM or KMS.
-- Invites don't carry the server's key fingerprint, so the first contact with a
-  server is trust on first use.
+- Sign-up invites carry the server's identity key (`silo:<key>:<code>[:<address>]`),
+  so first contact is checked. Bare codes still work and fall back to trust on
+  first use, with a warning. Logging in, linking a device or recovering on a new
+  device still connect by address alone.
 - Starting the app with no server reachable, using only the LAN, needs an
   earlier sign-in on that device.
 - Channel history is per device. A new device sees only messages sent after it

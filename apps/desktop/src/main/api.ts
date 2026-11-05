@@ -1,6 +1,8 @@
 import {
   ChallengeResponse,
   CreateInviteResponse,
+  formatInvite,
+  parseInvite,
   LinkRequestResponse,
   MeResponse,
   PendingLink,
@@ -94,8 +96,8 @@ export class SiloClient {
   }
 
   /** Finds a working address for the server and checks its identity before anything is sent. */
-  private async connect(serverUrl: string) {
-    return (await this.directory()).connect(serverUrl, (endpoint, viaTor) => this.emit({ type: 'connection', endpoint, viaTor }));
+  private async connect(serverUrl: string, expectKey?: string) {
+    return (await this.directory()).connect(serverUrl, (endpoint, viaTor) => this.emit({ type: 'connection', endpoint, viaTor }), expectKey);
   }
 
   private signedIn(net: Transport, server: KnownServer, s: { token: string; userId: string; deviceId: string }) {
@@ -234,7 +236,8 @@ export class SiloClient {
   }
 
   async signup(input: SignupInput): Promise<{ account: AccountView; recoveryKey: string }> {
-    const { transport: net, server } = await this.connect(input.serverUrl);
+    const invite = parseInvite(input.inviteCode);
+    const { transport: net, server } = await this.connect(input.serverUrl || invite.address || '', invite.serverKey);
     const username = input.username.trim();
     // The recovery key is never stored: it is shown once for the user to write down.
     const recovery = generateDeviceKeyPair();
@@ -246,7 +249,7 @@ export class SiloClient {
       {
         method: 'POST',
         body: JSON.stringify({
-          inviteCode: input.inviteCode.trim(),
+          inviteCode: invite.code,
           username,
           deviceName: input.deviceName.trim(),
           devicePublicKey: this.publicKey,
@@ -420,8 +423,13 @@ export class SiloClient {
     return { recoveryKey: formatRecoveryKey(next.secretKey) };
   }
 
-  createAccountInvite() {
-    return this.post('/v1/invites', { maxUses: 1, expiresInHours: 72 }, (v) => CreateInviteResponse.parse(v));
+  /** A one-time sign-up invite that carries this server's key and address, so the new person's app can't be fooled. */
+  async createAccountInvite() {
+    const s = this.session;
+    if (!s) throw new Error('Not signed in.');
+    const res = await this.post('/v1/invites', { maxUses: 1, expiresInHours: 72 }, (v) => CreateInviteResponse.parse(v));
+    const address = s.server.endpoints[0] ?? s.net.current;
+    return { ...res, code: formatInvite({ code: res.code, serverKey: s.server.serverKey, address }) };
   }
 
   /**
