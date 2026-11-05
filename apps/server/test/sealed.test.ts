@@ -83,7 +83,7 @@ describe('sealed sender', () => {
     const { envelopes } = (await app.inject({ method: 'GET', url: '/v1/messages', headers: bob.headers })).json();
     expect(envelopes).toMatchObject([{ type: 6, senderUserId: null, senderUsername: null, senderDeviceId: null, senderSignalDeviceId: null }]);
     const opened = await bob.signal.sealedDecrypt(envelopes[0].body, await trustRoot());
-    expect(opened.senderUserId).toBe(alice.userId);
+    expect(opened).toMatchObject({ senderUserId: alice.userId, senderUsername: 'alice' });
     expect(new TextDecoder().decode(opened.plaintext)).toBe('only bob knows this is from alice');
 
     // Bob can now answer over the session the sealed message started.

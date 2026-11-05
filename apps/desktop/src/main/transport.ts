@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import tls from 'node:tls';
 import { SocksClient } from 'socks';
 import { Agent, WebSocket, fetch, type Dispatcher } from 'undici';
@@ -47,13 +48,19 @@ export class UnreachableError extends Error {
   }
 }
 
-/** A connection agent that tunnels through a SOCKS5 proxy, letting Tor resolve the hostname. */
-function socksAgent(tor: TorSettings): Agent {
+/**
+ * A connection agent that tunnels through a SOCKS5 proxy, letting Tor resolve the hostname.
+ * With `isolate`, it gives Tor a random username and password, which makes Tor use a
+ * separate circuit, and never reuses a connection.
+ */
+function socksAgent(tor: TorSettings, isolate = false): Agent {
+  const auth = isolate ? { userId: randomBytes(12).toString('hex'), password: randomBytes(12).toString('hex') } : {};
   return new Agent({
+    ...(isolate ? { pipelining: 0 } : {}),
     connect: (opts, callback) => {
       const port = Number(opts.port) || (opts.protocol === 'https:' ? 443 : 80);
       SocksClient.createConnection({
-        proxy: { host: tor.proxyHost, port: tor.proxyPort, type: 5 },
+        proxy: { host: tor.proxyHost, port: tor.proxyPort, type: 5, ...auth },
         command: 'connect',
         destination: { host: opts.hostname, port },
         timeout: 60_000,
@@ -80,6 +87,8 @@ export class Transport {
   private list: string[];
   private index = 0;
   private readonly direct = new Agent({ connect: { timeout: 10_000 } });
+  /** Never keeps a connection open, so each isolated request arrives on a connection of its own. */
+  private readonly isolatedDirect = new Agent({ connect: { timeout: 10_000 }, pipelining: 0 });
   private tor?: Agent;
 
   constructor(
@@ -118,7 +127,8 @@ export class Transport {
     this.tor = undefined;
   }
 
-  private dispatcher(endpoint: string): Dispatcher {
+  private dispatcher(endpoint: string, isolated = false): Dispatcher {
+    if (isolated) return this.viaTor(endpoint) ? socksAgent(this.torSettings, true) : this.isolatedDirect;
     if (!this.viaTor(endpoint)) return this.direct;
     return (this.tor ??= socksAgent(this.torSettings));
   }
@@ -127,8 +137,16 @@ export class Transport {
    * Sends a request, failing over to the next address if it can't connect. A
    * request that might have reached the server (say the connection dropped
    * mid-way) is only retried elsewhere if it is safe to repeat.
+   *
+   * An `isolated` request shares no connection (and through Tor, no circuit) with
+   * any other, so the server can't link it to this device's signed-in requests by
+   * the connection it came on. Sealed messages use it.
    */
-  async request(path: string, init: { method?: string; headers?: Record<string, string>; body?: string }): Promise<Response> {
+  async request(
+    path: string,
+    init: { method?: string; headers?: Record<string, string>; body?: string; isolated?: boolean },
+  ): Promise<Response> {
+    const { isolated, ...rest } = init;
     const method = init.method ?? 'GET';
     const tried: string[] = [];
     let last: unknown;
@@ -138,10 +156,10 @@ export class Transport {
       tried.push(endpoint);
       try {
         const res = await fetch(endpoint + path, {
-          ...init,
+          ...rest,
           method,
           redirect: 'error',
-          dispatcher: this.dispatcher(endpoint),
+          dispatcher: this.dispatcher(endpoint, isolated),
           signal: AbortSignal.timeout(this.viaTor(endpoint) ? 90_000 : 30_000),
         });
         if (i !== this.index) {
@@ -165,6 +183,7 @@ export class Transport {
 
   close() {
     void this.direct.close();
+    void this.isolatedDirect.close();
     void this.tor?.close();
   }
 }

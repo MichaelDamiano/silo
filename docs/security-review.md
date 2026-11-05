@@ -111,13 +111,15 @@ These are the threats the project owner named, with where to look.
 | Local vault | AES-256-GCM, a random 96-bit nonce per write, the file name as AAD. The key is sealed by Electron `safeStorage`, which refuses Linux's `basic_text` fallback | `apps/desktop/src/main/vault.ts` |
 | LAN links | A fresh X25519 key per link. Both sides sign both ephemeral keys and both device ids with their login key. HKDF-SHA256 derives a key per direction. AES-256-GCM with a counter nonce | `apps/desktop/src/main/lan.ts` |
 | Server identity | Ed25519. Signs `serverInfo` with a nonce the client chooses | `apps/server/src/routes/server-info.ts` |
+| Sealed sender | libsignal sealed sender v1. Trust root and signer are Curve25519 keys derived from the server identity secret with HKDF-SHA256. Certificates last 24 hours | `packages/signal/src/certificates.ts`, `apps/server/src/routes/sealed.ts` |
 | Tokens and invite codes | 256-bit random values, stored as SHA-256 | `apps/server/src/auth.ts` |
 
 ## 7. What the server learns, by design
 
 - Usernames, who is in which server, roles and bans.
 - Which device sent a message to which account or channel, when, and how big it
-  was. There is no sealed sender yet.
+  was. The exception is a sealed direct message, whose sender the server doesn't
+  store. [sealed-sender.md](sealed-sender.md) lists what that does and doesn't hide.
 - Whom each person has blocked.
 - The content of reports: a report includes the reported text, *as the reporter
   chose to share it*, plus their note.
@@ -161,7 +163,8 @@ Findings that show the server learns more than this are what we most want.
 
 None of these needs a report, but ideas for fixing them are welcome.
 
-- No sealed sender. The server sees the sender of every message.
+- Sealed sender covers direct messages only, after the first message to each person.
+  Channel messages still name their sender. See [sealed-sender.md](sealed-sender.md).
 - No message franking. Reports are checked against the moderator's own copy, not
   bound to the sender cryptographically.
 - Unsigned release builds, and no code signing or notarization yet.

@@ -73,9 +73,9 @@ export interface Target {
 /** Envelope type for sealed-sender messages, next to Signal's own 2 (whisper) and 3 (pre-key). */
 export const SEALED = 6 as const;
 
-export interface OutgoingCopy {
+export interface OutgoingCopy<T extends 2 | 3 | typeof SEALED = 2 | 3> {
   deviceId: string;
-  type: 2 | 3 | typeof SEALED;
+  type: T;
   body: string;
 }
 
@@ -287,12 +287,12 @@ export class SignalDevice {
    * tell who sent it. The certificate, issued by the server, proves to the
    * recipient which account and device we are.
    */
-  sealedEncrypt(plaintext: Uint8Array, targets: Target[], senderCertificate: string): Promise<OutgoingCopy[]> {
+  sealedEncrypt(plaintext: Uint8Array, targets: Target[], senderCertificate: string): Promise<OutgoingCopy<typeof SEALED>[]> {
     return this.run(async () => {
       const me = this.requireSelf();
       const stores = this.stores();
       const cert = S.SenderCertificate.deserialize(unb64(senderCertificate));
-      const out: OutgoingCopy[] = [];
+      const out: OutgoingCopy<typeof SEALED>[] = [];
       for (const t of targets) {
         const address = S.ProtocolAddress.new(t.userId, t.signalDeviceId);
         if (!(addrKey(address) in this.state.sessions)) {
@@ -315,7 +315,10 @@ export class SignalDevice {
    * the server's trust root and that it hasn't expired, and the sender's identity
    * against the session, so the sender named here is the one who encrypted it.
    */
-  sealedDecrypt(body: string, trustRoot: string): Promise<{ senderUserId: string; senderSignalDeviceId: number; plaintext: Uint8Array }> {
+  sealedDecrypt(
+    body: string,
+    trustRoot: string,
+  ): Promise<{ senderUserId: string; senderUsername: string | null; senderSignalDeviceId: number; plaintext: Uint8Array }> {
     return this.run(async () => {
       const me = this.requireSelf();
       const stores = this.stores();
@@ -342,7 +345,7 @@ export class SignalDevice {
         }
         throw err instanceof Error ? err : new Error(String(err));
       }
-      return { senderUserId: res.senderUuid(), senderSignalDeviceId: res.deviceId(), plaintext: res.message() };
+      return { senderUserId: res.senderUuid(), senderUsername: res.senderE164(), senderSignalDeviceId: res.deviceId(), plaintext: res.message() };
     });
   }
 

@@ -29,8 +29,8 @@ export async function sealedRoutes(app: FastifyInstance, opts: { db: Db; keys: R
   /** A certificate naming this account, device and Signal identity key, for the recipient to check. */
   app.get('/v1/certificate', { preHandler: auth, config: limit(60, '1 hour') }, async (request) => {
     const { userId, deviceId } = request.auth!;
-    const { rows } = await db.query<{ signal_device_id: number | null; signal_identity_key: string | null }>(
-      'SELECT signal_device_id, signal_identity_key FROM devices WHERE id = $1',
+    const { rows } = await db.query<{ signal_device_id: number | null; signal_identity_key: string | null; username: string }>(
+      'SELECT d.signal_device_id, d.signal_identity_key, u.username FROM devices d JOIN users u ON u.id = d.user_id WHERE d.id = $1',
       [deviceId],
     );
     const d = rows[0];
@@ -38,6 +38,7 @@ export async function sealedRoutes(app: FastifyInstance, opts: { db: Db; keys: R
     const expiresAt = Date.now() + CERTIFICATE_TTL_MS;
     const certificate = issueSenderCertificate(keys, {
       userId,
+      username: d.username,
       signalDeviceId: d.signal_device_id,
       identityKey: d.signal_identity_key,
       expiresAt,

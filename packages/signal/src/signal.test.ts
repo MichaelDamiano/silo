@@ -201,7 +201,7 @@ describe('safety numbers', () => {
 describe('sealed sender', () => {
   const keys = sealedSenderKeys(new Uint8Array(32).fill(7));
   const certFor = (d: { dev: SignalDevice }, userId: string, n: number, expiresAt = Date.now() + 3600_000) =>
-    issueSenderCertificate(keys, { userId, signalDeviceId: n, identityKey: d.dev.identityKey, expiresAt });
+    issueSenderCertificate(keys, { userId, username: 'alice', signalDeviceId: n, identityKey: d.dev.identityKey, expiresAt });
   const alice = 'a0000000-0000-4000-8000-000000000001';
   const bobId = 'b0000000-0000-4000-8000-000000000002';
 
@@ -211,7 +211,7 @@ describe('sealed sender', () => {
     const [m] = await a.dev.sealedEncrypt(text('hi, sealed'), [{ ...b, userId: bobId, bundle: b.bundle() }], certFor(a, alice, 1));
     expect(m!.type).toBe(SEALED);
     const out = await b.dev.sealedDecrypt(m!.body, keys.trustRoot);
-    expect(out).toMatchObject({ senderUserId: alice, senderSignalDeviceId: 1 });
+    expect(out).toMatchObject({ senderUserId: alice, senderUsername: 'alice', senderSignalDeviceId: 1 });
     expect(read(out.plaintext)).toBe('hi, sealed');
     // A second message on the same session works too.
     const [m2] = await a.dev.sealedEncrypt(text('again'), [{ ...b, userId: bobId }], certFor(a, alice, 1));

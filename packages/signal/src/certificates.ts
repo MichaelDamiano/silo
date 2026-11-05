@@ -18,14 +18,18 @@ export function sealedSenderKeys(identitySecret: Uint8Array) {
   return { trustRoot: b64(root.getPublicKey().serialize()), signer, serverCert };
 }
 
-/** A short-lived certificate saying which account and device holds this Signal identity key. */
+/**
+ * A short-lived certificate saying which account and device holds this Signal identity
+ * key. The username rides in the field Signal uses for a phone number, so the recipient
+ * can show who wrote without asking the server, which would give the sender away.
+ */
 export function issueSenderCertificate(
   keys: ReturnType<typeof sealedSenderKeys>,
-  sender: { userId: string; signalDeviceId: number; identityKey: string; expiresAt: number },
+  sender: { userId: string; username: string; signalDeviceId: number; identityKey: string; expiresAt: number },
 ): string {
   const cert = S.SenderCertificate.new(
     sender.userId,
-    null,
+    sender.username,
     sender.signalDeviceId,
     S.PublicKey.deserialize(new Uint8Array(Buffer.from(sender.identityKey, 'base64'))),
     sender.expiresAt,

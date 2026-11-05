@@ -109,6 +109,10 @@ export class Safety {
       case 'block':
         if (a.userId === this.userId) throw new Error("You can't block yourself.");
         await this.request('PUT', `/v1/blocks/${a.userId}`, undefined, () => null);
+        // They may hold our access key, which would let them send sealed messages the
+        // server can't drop. A new key cuts that off; their app then falls back to
+        // normal sends, which the server drops because of the block.
+        await this.messenger()?.rotateAccessKey();
         return this.refreshBlocks();
       case 'unblock':
         await this.request('DELETE', `/v1/blocks/${a.userId}`, undefined, () => null);
