@@ -18,7 +18,7 @@
     "@silo/protocol": "0.1.0",
     "@silo/signal": "0.1.0",
     "socks": "^2.8.10",
-    "undici": "^7.30.1",
+    "undici": "^8.12.3",
     "zod": "^4.6.7"
   },
   "devDependencies": {
