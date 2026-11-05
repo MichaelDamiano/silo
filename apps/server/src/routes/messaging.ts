@@ -3,6 +3,7 @@ import type pg from 'pg';
 import {
   AckRequest,
   AddPreKeysRequest,
+  SEALED_TYPE,
   SendMessagesRequest,
   UploadKeysRequest,
   signalIdentityPayload,
@@ -185,7 +186,9 @@ export async function messagingRoutes(app: FastifyInstance, opts: { db: Db }) {
   app.post('/v1/messages', { config: limit(120, '1 minute'), bodyLimit: BODY_LIMITS.directMessage }, async (request, reply) => {
     const body = SendMessagesRequest.parse(request.body);
     const me = request.auth!;
-    if (body.recipientUserId === me.userId) throw new HttpError(400, 'use your own user only through your other devices');
+    // Sending to yourself copies a message to your other devices only, for example
+    // after a sealed send, which can't carry copies for the sender.
+    const toSelf = body.recipientUserId === me.userId;
     if (!(await canMessage(db, me.userId, body.recipientUserId))) throw new HttpError(404, 'user not found');
 
     const expected = await db.query<{ id: string; user_id: string }>(
@@ -200,11 +203,13 @@ export async function messagingRoutes(app: FastifyInstance, opts: { db: Db }) {
     if (missing.length || extra.length || got.size !== body.messages.length) {
       return reply.code(409).send({ error: 'device list is out of date', missing, extra });
     }
-    if (!expected.rows.some((r) => r.user_id === body.recipientUserId)) throw new HttpError(409, "that person hasn't set up encryption on any device yet");
+    if (!toSelf && !expected.rows.some((r) => r.user_id === body.recipientUserId)) throw new HttpError(409, "that person hasn't set up encryption on any device yet");
 
     // If the recipient blocked the sender, their copies are dropped. The sender gets the
     // same answer either way, so blocking someone doesn't tell them they're blocked.
-    const blocked = await db.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [body.recipientUserId, me.userId]);
+    const blocked = toSelf
+      ? { rows: [] }
+      : await db.query('SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2', [body.recipientUserId, me.userId]);
     const recipientDevices = new Set(expected.rows.filter((r) => r.user_id === body.recipientUserId).map((r) => r.id));
     const keep = blocked.rows[0] ? body.messages.filter((m) => !recipientDevices.has(m.deviceId)) : body.messages;
     const targets = new Set(keep.map((m) => m.deviceId));
@@ -226,30 +231,34 @@ export async function messagingRoutes(app: FastifyInstance, opts: { db: Db }) {
     ]);
     const { rows } = await db.query<{
       id: string;
-      sender_user: string;
-      username: string;
-      sender_device: string;
-      signal_device_id: number;
-      message_type: 2 | 3;
+      sender_user: string | null;
+      username: string | null;
+      sender_device: string | null;
+      signal_device_id: number | null;
+      message_type: 2 | 3 | 6;
       body: Buffer;
       created_at: Date;
     }>(
       `SELECT e.id, e.sender_user, u.username, e.sender_device, d.signal_device_id, e.message_type, e.body, e.created_at
-         FROM envelopes e JOIN users u ON u.id = e.sender_user JOIN devices d ON d.id = e.sender_device
+         FROM envelopes e LEFT JOIN users u ON u.id = e.sender_user LEFT JOIN devices d ON d.id = e.sender_device
         WHERE e.recipient_device = $1 ORDER BY e.created_at, e.id LIMIT 100`,
       [deviceId],
     );
     return {
-      envelopes: rows.map((r) => ({
-        id: r.id,
-        senderUserId: r.sender_user,
-        senderUsername: r.username,
-        senderDeviceId: r.sender_device,
-        senderSignalDeviceId: r.signal_device_id,
-        type: r.message_type,
-        body: r.body.toString('base64'),
-        receivedAt: r.created_at.toISOString(),
-      })),
+      envelopes: rows.map((r): Envelope => {
+        const common = { id: r.id, body: r.body.toString('base64'), receivedAt: r.created_at.toISOString() };
+        if (r.message_type === SEALED_TYPE) {
+          return { ...common, type: SEALED_TYPE, senderUserId: null, senderUsername: null, senderDeviceId: null, senderSignalDeviceId: null };
+        }
+        return {
+          ...common,
+          type: r.message_type,
+          senderUserId: r.sender_user!,
+          senderUsername: r.username!,
+          senderDeviceId: r.sender_device!,
+          senderSignalDeviceId: r.signal_device_id!,
+        };
+      }),
     };
   });
 

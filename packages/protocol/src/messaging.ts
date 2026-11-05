@@ -57,16 +57,53 @@ export const MismatchedDevices = z.object({
   extra: z.array(z.uuid()),
 });
 
-export const Envelope = z.object({
-  id: z.uuid(),
+/** A sealed-sender message. The sender is hidden from the server, so it only travels inside the encryption. */
+export const SEALED_TYPE = 6;
+
+/**
+ * Lets someone send you sealed messages. You hand it out inside encrypted messages,
+ * and the server only keeps its hash. 16 random bytes, base64url.
+ */
+export const AccessKey = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
+export const ACCESS_KEY_HEADER = 'silo-access-key';
+
+export const SealedSendRequest = z.object({
+  messages: z
+    .array(z.object({ deviceId: z.uuid(), type: z.literal(SEALED_TYPE), body: b64.max(MAX_CIPHERTEXT) }))
+    .min(1)
+    .max(128),
+});
+
+/** Returned with 409 when a sealed send's device list is out of date. Includes what the sender needs to fix it. */
+export const SealedMismatch = z.object({
+  error: z.string(),
+  devices: z.array(z.object({ deviceId: z.uuid(), signalDeviceId: z.number().int() })),
+});
+
+export const SenderCertificateResponse = z.object({ certificate: b64, expiresAt: z.iso.datetime() });
+export const SetAccessKeyRequest = z.object({ accessKey: AccessKey });
+
+const SenderFields = z.object({
   senderUserId: z.uuid(),
   senderUsername: z.string(),
   senderDeviceId: z.uuid(),
   senderSignalDeviceId: z.number().int(),
   type: SignalMessageType,
-  body: b64,
-  receivedAt: z.iso.datetime(),
 });
+
+/** A sealed envelope has no sender fields: the recipient finds the sender inside it. */
+const SealedFields = z.object({
+  senderUserId: z.null(),
+  senderUsername: z.null(),
+  senderDeviceId: z.null(),
+  senderSignalDeviceId: z.null(),
+  type: z.literal(SEALED_TYPE),
+});
+
+/** An envelope whose sender the server knows. */
+export const IdentifiedEnvelope = z.object({ id: z.uuid(), ...SenderFields.shape, body: b64, receivedAt: z.iso.datetime() });
+export const SealedEnvelope = z.object({ id: z.uuid(), ...SealedFields.shape, body: b64, receivedAt: z.iso.datetime() });
+export const Envelope = z.union([IdentifiedEnvelope, SealedEnvelope]);
 
 export const EnvelopeList = z.object({ envelopes: z.array(Envelope) });
 export const AckRequest = z.object({ ids: z.array(z.uuid()).min(1).max(500) });
@@ -81,11 +118,15 @@ export const DirectMessagePayload = z.object({
   peerUsername: z.string(),
   sentAt: z.iso.datetime(),
   text: z.string().min(1).max(4000),
+  /** The sender's access key, so the recipient can send sealed messages back. */
+  accessKey: AccessKey.optional(),
 });
 
 export type UploadKeysRequest = z.infer<typeof UploadKeysRequest>;
 export type DeviceBundle = z.infer<typeof DeviceBundle>;
 export type Envelope = z.infer<typeof Envelope>;
+export type IdentifiedEnvelope = z.infer<typeof IdentifiedEnvelope>;
+export type SealedEnvelope = z.infer<typeof SealedEnvelope>;
 export type SendMessagesRequest = z.infer<typeof SendMessagesRequest>;
 export type DirectMessagePayload = z.infer<typeof DirectMessagePayload>;
 

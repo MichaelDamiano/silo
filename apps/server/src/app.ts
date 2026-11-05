@@ -10,7 +10,9 @@ import { inviteRoutes } from './routes/invites.js';
 import { spaceRoutes } from './routes/spaces.js';
 import { messagingRoutes } from './routes/messaging.js';
 import { channelRoutes } from './routes/channels.js';
-import { serverInfoRoutes } from './routes/server-info.js';
+import { serverIdentity, serverInfoRoutes } from './routes/server-info.js';
+import { sealedRoutes } from './routes/sealed.js';
+import { sealedSenderKeys } from '@silo/signal';
 import { safetyRoutes } from './routes/safety.js';
 import { LiveHub, liveRoutes } from './live.js';
 
@@ -63,10 +65,13 @@ export async function buildApp(config: Config, db: Db, opts: { logger?: boolean 
   await app.register(deviceRoutes, { db, config });
   await app.register(inviteRoutes, { db });
   await app.register(spaceRoutes, { db });
+  const identity = await serverIdentity(db, config.serverKeyFile);
+  const sealed = sealedSenderKeys(identity.secretKey);
   await app.register(messagingRoutes, { db });
+  await app.register(sealedRoutes, { db, keys: sealed });
   await app.register(channelRoutes, { db });
   await app.register(safetyRoutes, { db });
-  await app.register(serverInfoRoutes, { db, config });
+  await app.register(serverInfoRoutes, { config, identity, sealedSenderRoot: sealed.trustRoot });
   await app.register(liveRoutes, { db });
   return app;
 }
