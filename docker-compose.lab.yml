@@ -1,0 +1,51 @@
+# Connectivity lab: lets you switch Silo's addresses off one at a time on a single computer,
+# to watch the app fail over between them. Use it on top of the normal compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.lab.yml up -d --build
+#
+# The server is no longer published directly. Instead two relays forward to it:
+#   main-door  127.0.0.1:8443  the address your app already uses
+#   relay      127.0.0.1:8444  a fallback the server publishes in its signed address list
+# Stopping main-door is like the main address being blocked: the server keeps running and
+# the app should move to the relay by itself. Add `--profile tor` for an onion address too.
+# See docs/testing-connectivity.md for the full walkthrough.
+services:
+  server:
+    # Not reachable from this computer except through the relays below.
+    ports: !reset []
+    environment:
+      PUBLIC_URLS: http://127.0.0.1:8444
+
+  main-door:
+    image: node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
+    command: ["node", "/relay/relay.mjs"]
+    user: node
+    environment:
+      LISTEN: 0.0.0.0:8443
+      UPSTREAM: server:8443
+    volumes:
+      - ./tools/relay:/relay:ro
+    ports:
+      - "127.0.0.1:8443:8443"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      - server
+
+  relay:
+    image: node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
+    command: ["node", "/relay/relay.mjs"]
+    user: node
+    environment:
+      LISTEN: 0.0.0.0:8444
+      UPSTREAM: server:8443
+    volumes:
+      - ./tools/relay:/relay:ro
+    ports:
+      - "127.0.0.1:8444:8444"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      - server

@@ -55,6 +55,8 @@ An invite-only, end-to-end encrypted messaging app with servers, channels and di
 - If the server is unreachable, DMs and channel messages go straight to the people linked on your network, marked as sent locally. When the server is back they're sent through it as well, so everyone else gets them. Nobody sees them twice.
 - For now this only works while the app is already running and signed in when the server goes down. It also needs an earlier conversation with that person (an existing Signal session).
 
+To try each of these on one computer (switching addresses off one at a time, Tor, and local delivery with the server stopped), see [docs/testing-connectivity.md](docs/testing-connectivity.md).
+
 ### Running a Tor onion service
 
 ```sh
