@@ -135,13 +135,15 @@ npm run dev -w @silo/server
 npm run invite:create -w @silo/server -- --uses 5 --hours 72
 ```
 
-Then start the desktop app and paste the `Invite: silo:…` line it printed. A full invite carries the server's identity key, so the app refuses to sign up with any other server answering at that address. Set `PUBLIC_URLS` to have the address included too:
+Then start the desktop app (this also builds the shared packages it needs) and paste the `Invite: silo:…` line it printed. A full invite carries the server's identity key, so the app refuses to sign up with any other server answering at that address. Set `PUBLIC_URLS` to have the address included too:
 
 ```sh
 npm run dev -w @silo/desktop
 ```
 
-On Linux the desktop app needs a running keychain such as GNOME Keyring or KWallet.
+On Linux the desktop app needs a running keychain such as GNOME Keyring or KWallet. On Windows, Docker Desktop needs the Virtual Machine Platform feature (`Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -All` in an administrator PowerShell, then restart).
+
+To try two people on one computer, start a second copy with its own data folder: `npx electron apps/desktop --user-data-dir=./test-user2`.
 
 ## Tests
 
