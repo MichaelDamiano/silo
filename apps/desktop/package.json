@@ -8,10 +8,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.main.json && vite build",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
-    "dev": "npm run build && electron .",
+    "build:deps": "npm run build -w @silo/protocol -w @silo/signal",
+    "dev": "npm run build:deps && npm run build && electron .",
     "start": "electron .",
     "test": "vitest run",
-    "dist": "npm run build && electron-builder --publish never",
+    "dist": "npm run build:deps && npm run build && electron-builder --publish never",
     "verify-release": "node scripts/verify-release.mjs"
   },
   "dependencies": {
