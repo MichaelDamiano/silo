@@ -7,6 +7,7 @@ import {
   SenderCertificateResponse,
   ChannelMessageList,
   ChannelMessagePayload,
+  ChannelPayload,
   DirectMessagePayload,
   EnvelopeList,
   PairwisePayload,
@@ -18,12 +19,17 @@ import {
   SpaceList,
   type DeviceBundle,
   type Envelope,
+  type DirectPayload,
+  type DirectReactionPayload,
+  type ChannelReactionPayload,
+  Emoji,
+  type ReplyRef,
   type LanFrame,
   type SealedEnvelope,
 } from '@silo/protocol';
 import { IdentityChangedError, MissingSenderKeyError, SignalDevice, safetyNumber, type StateStore, type Target } from '@silo/signal';
 import { z } from 'zod';
-import type { AppEvent, ChannelMessageView, ChannelView, Conversation, ConversationSummary, DmMessage } from '../shared/ipc.js';
+import type { AppEvent, ChannelMessageView, ChannelView, Conversation, ConversationSummary, DmMessage, ReactionView, ReplyView } from '../shared/ipc.js';
 import type { ChannelMessage } from '@silo/protocol';
 import type { Vault } from './vault.js';
 import type { WebSocket } from 'undici';
@@ -57,7 +63,39 @@ interface Sealed {
 }
 
 /** Messages that only went over the local network, to send through the server once it's back. */
-type OutboxItem = { kind: 'dm'; payload: DirectMessagePayload } | { kind: 'channel'; payload: ChannelMessagePayload };
+type OutboxItem = { kind: 'dm'; payload: DirectPayload } | { kind: 'channel'; payload: ChannelPayload };
+
+/** One person's latest say on one emoji. Kept even when taken back, so an older copy arriving late can't undo it. */
+interface ReactionRecord {
+  userId: string;
+  username: string;
+  emoji: string;
+  at: string;
+  on: boolean;
+}
+
+/** What is kept on disk for a message: the quote as the sender claimed it, and every reaction. */
+interface Stored {
+  reply?: ReplyRef;
+  r?: ReactionRecord[];
+}
+type StoredDm = Omit<DmMessage, 'replyTo' | 'reactions'> & Stored;
+type StoredChannelMessage = Omit<ChannelMessageView, 'replyTo' | 'reactions'> & Stored;
+
+/** A reaction whose message hasn't arrived yet, such as one still waiting for its sender's key. */
+interface PendingReaction {
+  /** The conversation partner for DMs, the channel for channel messages. */
+  where: string;
+  messageId: string;
+  rec: ReactionRecord;
+}
+
+/** Limits that keep one person from filling the vault with reactions. */
+const MAX_REACTIONS_PER_MESSAGE = 300;
+const MAX_PENDING_REACTIONS = 500;
+const QUOTE_LENGTH = 200;
+/** Shown in a quote instead of the text of a message from someone this account blocked. */
+const BLOCKED_QUOTE = 'Message from someone you blocked.';
 
 interface Meta {
   deviceId: string;
@@ -65,7 +103,8 @@ interface Meta {
 }
 
 interface History {
-  conversations: Record<string, { peerUsername: string; messages: DmMessage[] }>;
+  conversations: Record<string, { peerUsername: string; messages: StoredDm[] }>;
+  pendingReactions?: PendingReaction[];
 }
 
 /** How long a channel message may wait for its sender's key before we give up on it. */
@@ -79,9 +118,49 @@ interface Channels {
   cursor: number;
   /** Our own sender key per channel, and which member devices already have it. */
   out: Record<string, { distributionId: string; sentTo: string[] }>;
-  history: Record<string, ChannelMessageView[]>;
+  history: Record<string, StoredChannelMessage[]>;
   /** Messages that arrived before their sender's key; retried after each sync. */
   pending: ChannelMessage[];
+  pendingReactions?: PendingReaction[];
+}
+
+/** The start of a message, for quoting it in a reply. Cut on whole characters so an emoji isn't split. */
+function excerpt(text: string): string {
+  const chars = Array.from(text);
+  return chars.length > QUOTE_LENGTH ? chars.slice(0, QUOTE_LENGTH).join('') + '…' : text;
+}
+
+/** Records a reaction unless a newer one from the same person for the same emoji is already there. */
+function applyReaction(msg: Stored, rec: ReactionRecord) {
+  const list = (msg.r ??= []);
+  const i = list.findIndex((x) => x.userId === rec.userId && x.emoji === rec.emoji);
+  if (i >= 0) {
+    if (list[i]!.at > rec.at) return;
+    list[i] = rec;
+  } else if (list.length < MAX_REACTIONS_PER_MESSAGE) list.push(rec);
+}
+
+/** Moves any reactions that were waiting for this message onto it. */
+function claimPending(pending: PendingReaction[] | undefined, where: string, msg: { id: string } & Stored): PendingReaction[] | undefined {
+  if (!pending?.length) return pending;
+  const rest: PendingReaction[] = [];
+  for (const p of pending) {
+    if (p.where === where && p.messageId === msg.id) applyReaction(msg, p.rec);
+    else rest.push(p);
+  }
+  return rest;
+}
+
+function stash(pending: PendingReaction[] | undefined, p: PendingReaction): PendingReaction[] {
+  const list = pending ?? [];
+  list.push(p);
+  return list.length > MAX_PENDING_REACTIONS ? list.slice(-MAX_PENDING_REACTIONS) : list;
+}
+
+/** A reply names the message it answers; forwarding marks a copy of a message sent somewhere else. */
+export interface SendOptions {
+  replyTo?: string;
+  forwarded?: boolean;
 }
 
 export class HttpStatusError extends Error {
@@ -189,7 +268,8 @@ export class Messenger {
 
   /** Our own decrypted copy of a channel message, by the server's sequence number. */
   channelMessage(channelId: string, seq: number): ChannelMessageView | undefined {
-    return this.channels.history[channelId]?.find((m) => m.seq === seq);
+    const m = this.channels.history[channelId]?.find((x) => x.seq === seq);
+    return m && this.channelView(channelId, m);
   }
 
   stop() {
@@ -272,13 +352,80 @@ export class Messenger {
 
   conversations(): ConversationSummary[] {
     return Object.entries(this.history.conversations)
-      .map(([peerUserId, c]) => ({ peerUserId, peerUsername: c.peerUsername, last: c.messages.at(-1) ?? null }))
+      .map(([peerUserId, c]) => {
+        const last = c.messages.at(-1);
+        return { peerUserId, peerUsername: c.peerUsername, last: last ? this.dmView(peerUserId, last) : null };
+      })
       .sort((a, b) => (b.last?.sentAt ?? '').localeCompare(a.last?.sentAt ?? ''));
   }
 
   conversation(peerUserId: string, peerUsername?: string): Conversation {
     const c = this.history.conversations[peerUserId];
-    return { peerUserId, peerUsername: c?.peerUsername ?? peerUsername ?? 'unknown', messages: c?.messages ?? [] };
+    return {
+      peerUserId,
+      peerUsername: c?.peerUsername ?? peerUsername ?? 'unknown',
+      messages: (c?.messages ?? []).map((m) => this.dmView(peerUserId, m)),
+    };
+  }
+
+  /** The people behind each emoji on a message, leaving out anyone hidden. */
+  private reactionsView(records: ReactionRecord[] | undefined, hide?: (userId: string) => boolean): ReactionView[] | undefined {
+    const groups = new Map<string, ReactionView>();
+    for (const x of records ?? []) {
+      if (!x.on || hide?.(x.userId)) continue;
+      const g = groups.get(x.emoji) ?? { emoji: x.emoji, count: 0, mine: false, names: [] };
+      g.count++;
+      if (x.userId === this.api.userId) g.mine = true;
+      g.names.push(x.userId === this.api.userId ? 'You' : x.username);
+      groups.set(x.emoji, g);
+    }
+    return groups.size ? [...groups.values()] : undefined;
+  }
+
+  /**
+   * A DM as the app shows it. A reply quotes our own copy of the original when we
+   * have it, so the quote can't be made up; otherwise it shows the sender's claim, marked.
+   */
+  private dmView(peerUserId: string, m: StoredDm): DmMessage {
+    const { reply, r, ...out } = m as StoredDm & Pick<DmMessage, 'replyTo' | 'reactions'>;
+    const c = this.history.conversations[peerUserId];
+    const peerName = c?.peerUsername ?? 'them';
+    if (reply) {
+      const orig = c?.messages.find((x) => x.id === reply.id);
+      out.replyTo =
+        orig && !orig.error
+          ? { id: reply.id, author: orig.from === 'me' ? 'You' : peerName, text: excerpt(orig.text) }
+          : {
+              id: reply.id,
+              author: reply.userId === this.api.userId ? 'You' : reply.userId === peerUserId ? peerName : 'someone else',
+              text: reply.text,
+              missing: true,
+            };
+    }
+    const reactions = this.reactionsView(r);
+    if (reactions) out.reactions = reactions;
+    return out;
+  }
+
+  private channelView(channelId: string, m: StoredChannelMessage): ChannelMessageView {
+    const { reply, r, ...out } = m as StoredChannelMessage & Pick<ChannelMessageView, 'replyTo' | 'reactions'>;
+    const hidden = (userId: string) => userId !== this.api.userId && this.blocked.has(userId);
+    if (hidden(m.senderUserId) && m.from !== 'me') out.blocked = true;
+    if (reply) {
+      const orig = this.channels.history[channelId]?.find((x) => x.id === reply.id);
+      out.replyTo =
+        orig && !orig.error
+          ? { id: reply.id, author: orig.from === 'me' ? 'You' : orig.senderUsername, text: hidden(orig.senderUserId) ? BLOCKED_QUOTE : excerpt(orig.text) }
+          : {
+              id: reply.id,
+              author: reply.userId === this.api.userId ? 'You' : (this.knownUsername(reply.userId) ?? 'unknown'),
+              text: hidden(reply.userId) ? BLOCKED_QUOTE : reply.text,
+              missing: true,
+            };
+    }
+    const reactions = this.reactionsView(r, hidden);
+    if (reactions) out.reactions = reactions;
+    return out;
   }
 
   /** Fetches, decrypts and stores everything waiting for this device. Runs one at a time. */
@@ -378,7 +525,7 @@ export class Messenger {
   ) {
     const fromMe = e.senderUserId === this.api.userId;
     let peer = { id: e.senderUserId, name: e.senderUsername };
-    let msg: DmMessage;
+    let msg: StoredDm;
     try {
       if (!plaintext) throw failure;
       const payload = PairwisePayload.parse(JSON.parse(new TextDecoder().decode(plaintext)));
@@ -392,7 +539,20 @@ export class Messenger {
       if (!fromMe && payload.accessKey) await this.learnAccessKey(e.senderUserId, payload.accessKey);
       // A copy from one of our own devices belongs to the conversation it was sent in.
       if (fromMe) peer = { id: payload.peerUserId, name: payload.peerUsername };
-      msg = { id: payload.id, from: fromMe ? 'me' : 'them', text: payload.text, sentAt: payload.sentAt };
+      if (payload.kind === 'dmReaction') {
+        // Signal proves who reacted; the message it points at has to be in our conversation with them.
+        this.reactInDm(peer.id, payload.messageId, { userId: e.senderUserId, username: e.senderUsername, emoji: payload.emoji, at: payload.sentAt, on: payload.on });
+        touched.add(peer.id);
+        return;
+      }
+      msg = {
+        id: payload.id,
+        from: fromMe ? 'me' : 'them',
+        text: payload.text,
+        sentAt: payload.sentAt,
+        ...(payload.replyTo ? { reply: payload.replyTo } : {}),
+        ...(payload.forwarded ? { forwarded: true } : {}),
+      };
     } catch (err) {
       if (fromMe || this.blocked.has(e.senderUserId)) return;
       msg = {
@@ -408,6 +568,18 @@ export class Messenger {
     }
     this.store(peer.id, peer.name, msg);
     touched.add(peer.id);
+  }
+
+  private reactInDm(peerUserId: string, messageId: string, rec: ReactionRecord) {
+    const target = this.history.conversations[peerUserId]?.messages.find((m) => m.id === messageId);
+    if (target) applyReaction(target, rec);
+    else this.history.pendingReactions = stash(this.history.pendingReactions, { where: peerUserId, messageId, rec });
+  }
+
+  private reactInChannel(channelId: string, messageId: string, rec: ReactionRecord) {
+    const target = this.channels.history[channelId]?.find((m) => m.id === messageId);
+    if (target) applyReaction(target, rec);
+    else this.channels.pendingReactions = stash(this.channels.pendingReactions, { where: channelId, messageId, rec });
   }
 
   private async learnAccessKey(userId: string, key: string) {
@@ -535,10 +707,7 @@ export class Messenger {
   }
 
   channel(channelId: string): ChannelView {
-    const messages = (this.channels.history[channelId] ?? []).map((m) =>
-      this.blocked.has(m.senderUserId) && m.from !== 'me' ? { ...m, blocked: true } : m,
-    );
-    return { channelId, messages };
+    return { channelId, messages: (this.channels.history[channelId] ?? []).map((m) => this.channelView(channelId, m)) };
   }
 
   /** Fetches new channel messages, then retries any that were waiting for a sender key. */
@@ -564,13 +733,29 @@ export class Messenger {
     const list = (this.channels.history[m.channelId] ??= []);
     const placeholder = `srv-${m.seq}`;
     const base = { from: 'them' as const, senderUserId: m.senderUserId, senderUsername: m.senderUsername, ...(m.seq > 0 ? { seq: m.seq } : {}) };
-    let msg: ChannelMessageView;
+    let msg: StoredChannelMessage;
     try {
       const { plaintext } = await this.signal.groupDecrypt(m.senderUserId, m.senderSignalDeviceId, m.body);
-      const p = ChannelMessagePayload.parse(JSON.parse(new TextDecoder().decode(plaintext)));
+      const p = ChannelPayload.parse(JSON.parse(new TextDecoder().decode(plaintext)));
       // The server says where a message belongs; the sender's signed payload has to agree.
       if (p.channelId !== m.channelId || p.spaceId !== m.spaceId) throw new Error('channel mismatch');
-      msg = { ...base, id: p.id, text: p.text, sentAt: p.sentAt, from: m.senderUserId === this.api.userId ? 'me' : 'them' };
+      if (p.kind === 'reaction') {
+        // It may have been waiting for its key behind a placeholder.
+        const i = list.findIndex((x) => x.id === placeholder);
+        if (i >= 0) list.splice(i, 1);
+        this.reactInChannel(m.channelId, p.messageId, { userId: m.senderUserId, username: m.senderUsername, emoji: p.emoji, at: p.sentAt, on: p.on });
+        touched.add(m.channelId);
+        return;
+      }
+      msg = {
+        ...base,
+        id: p.id,
+        text: p.text,
+        sentAt: p.sentAt,
+        from: m.senderUserId === this.api.userId ? 'me' : 'them',
+        ...(p.replyTo ? { reply: p.replyTo } : {}),
+        ...(p.forwarded ? { forwarded: true } : {}),
+      };
     } catch (err) {
       const fresh = Date.now() - Date.parse(m.receivedAt) < PENDING_MAX_MS;
       if (err instanceof MissingSenderKeyError && fresh) {
@@ -592,7 +777,10 @@ export class Messenger {
     const known = list.find((x) => x.id === msg.id);
     // The same message can come over the local network first; the server's copy adds its number.
     if (known) known.seq ??= msg.seq;
-    else list.push(msg);
+    else {
+      list.push(msg);
+      this.channels.pendingReactions = claimPending(this.channels.pendingReactions, m.channelId, msg);
+    }
     list.sort((a, b) => a.sentAt.localeCompare(b.sentAt));
     touched.add(m.channelId);
   }
@@ -601,7 +789,8 @@ export class Messenger {
    * Sends to a channel. Our sender key goes to any member device that doesn't have
    * it yet. If a device left the server, the key is replaced first so it can't read on.
    */
-  async sendToChannel(spaceId: string, channelId: string, text: string): Promise<ChannelView> {
+  async sendToChannel(spaceId: string, channelId: string, text: string, opts: SendOptions = {}): Promise<ChannelView> {
+    const replyTo = opts.replyTo ? this.channelReplyRef(channelId, opts.replyTo) : undefined;
     const payload: ChannelMessagePayload = {
       v: 1,
       kind: 'channel',
@@ -610,15 +799,10 @@ export class Messenger {
       channelId,
       sentAt: new Date().toISOString(),
       text: ChannelMessagePayload.shape.text.parse(text.trim()),
+      ...(replyTo ? { replyTo } : {}),
+      ...(opts.forwarded ? { forwarded: true as const } : {}),
     };
-    let note: string | undefined;
-    try {
-      await this.sendChannelOnline(payload);
-    } catch (err) {
-      if (!(err instanceof UnreachableError)) throw err;
-      await this.sendChannelLan(payload);
-      note = LAN_NOTE;
-    }
+    const note = await this.deliverChannel(payload);
     const list = (this.channels.history[channelId] ??= []);
     list.push({
       id: payload.id,
@@ -627,13 +811,72 @@ export class Messenger {
       senderUsername: 'You',
       text: payload.text,
       sentAt: payload.sentAt,
+      ...(replyTo ? { reply: replyTo } : {}),
+      ...(opts.forwarded ? { forwarded: true } : {}),
       ...(note ? { note } : {}),
     });
     await this.vault.write('channels', this.channels);
     return this.channel(channelId);
   }
 
-  private async sendChannelOnline(payload: ChannelMessagePayload) {
+  /** Adds or takes back our reaction to a channel message, encrypted for the channel like a message. */
+  async reactInChannelMessage(spaceId: string, channelId: string, messageId: string, emoji: string, on: boolean): Promise<ChannelView> {
+    const target = this.channels.history[channelId]?.find((m) => m.id === messageId);
+    if (!target || target.error) throw new Error('You can’t react to that message.');
+    const payload: ChannelReactionPayload = {
+      v: 1,
+      kind: 'reaction',
+      id: randomUUID(),
+      spaceId,
+      channelId,
+      messageId,
+      emoji: Emoji.parse(emoji),
+      on,
+      sentAt: new Date().toISOString(),
+    };
+    await this.deliverChannel(payload);
+    applyReaction(target, { userId: this.api.userId, username: 'You', emoji: payload.emoji, at: payload.sentAt, on });
+    await this.vault.write('channels', this.channels);
+    return this.channel(channelId);
+  }
+
+  /** What a reply sends along about the message it answers. Only a message we could read can be replied to. */
+  private channelReplyRef(channelId: string, messageId: string): ReplyRef {
+    const m = this.channels.history[channelId]?.find((x) => x.id === messageId);
+    if (!m || m.error) throw new Error('The message you’re replying to isn’t available.');
+    return { id: m.id, userId: m.senderUserId, text: excerpt(m.text) };
+  }
+
+  private dmReplyRef(peerUserId: string, messageId: string): ReplyRef {
+    const m = this.history.conversations[peerUserId]?.messages.find((x) => x.id === messageId);
+    if (!m || m.error) throw new Error('The message you’re replying to isn’t available.');
+    return { id: m.id, userId: m.from === 'me' ? this.api.userId : peerUserId, text: excerpt(m.text) };
+  }
+
+  /** Sends through the server, or over the local network when it's down. Returns a note for the latter. */
+  private async deliverChannel(payload: ChannelPayload): Promise<string | undefined> {
+    try {
+      await this.sendChannelOnline(payload);
+      return undefined;
+    } catch (err) {
+      if (!(err instanceof UnreachableError)) throw err;
+      await this.sendChannelLan(payload);
+      return LAN_NOTE;
+    }
+  }
+
+  private async deliverDm(payload: DirectPayload): Promise<string | undefined> {
+    try {
+      await this.sendDmOnline(payload);
+      return undefined;
+    } catch (err) {
+      if (!(err instanceof UnreachableError)) throw err;
+      await this.sendDmLan(payload);
+      return LAN_NOTE;
+    }
+  }
+
+  private async sendChannelOnline(payload: ChannelPayload) {
     const { spaceId, channelId } = payload;
     for (let attempt = 0; ; attempt++) {
       try {
@@ -653,7 +896,7 @@ export class Messenger {
    * Sends a channel message straight to member devices linked on the local network.
    * Any of them without our sender key get it first over their pairwise session.
    */
-  private async sendChannelLan(payload: ChannelMessagePayload) {
+  private async sendChannelLan(payload: ChannelPayload) {
     const { spaceId, channelId } = payload;
     const targets = this.lanTargets(this.directory.spaces[spaceId] ?? []);
     if (!targets.length) throw this.noLanPeers();
@@ -703,16 +946,18 @@ export class Messenger {
     await this.vault.write('channels', this.channels);
   }
 
-  private store(peerUserId: string, peerUsername: string, msg: DmMessage) {
+  private store(peerUserId: string, peerUsername: string, msg: StoredDm) {
     const c = (this.history.conversations[peerUserId] ??= { peerUsername, messages: [] });
     c.peerUsername = peerUsername;
     if (c.messages.some((m) => m.id === msg.id)) return;
     c.messages.push(msg);
+    this.history.pendingReactions = claimPending(this.history.pendingReactions, peerUserId, msg);
     c.messages.sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   }
 
   /** Encrypts a DM separately for each of the recipient's devices and each of our other devices. */
-  async send(peerUserId: string, peerUsername: string, text: string): Promise<Conversation> {
+  async send(peerUserId: string, peerUsername: string, text: string, opts: SendOptions = {}): Promise<Conversation> {
+    const replyTo = opts.replyTo ? this.dmReplyRef(peerUserId, opts.replyTo) : undefined;
     const payload: DirectMessagePayload = {
       v: 1,
       kind: 'dm',
@@ -722,21 +967,46 @@ export class Messenger {
       sentAt: new Date().toISOString(),
       text: DirectMessagePayload.shape.text.parse(text.trim()),
       ...(this.accessKey ? { accessKey: this.accessKey } : {}),
+      ...(replyTo ? { replyTo } : {}),
+      ...(opts.forwarded ? { forwarded: true as const } : {}),
     };
-    let note: string | undefined;
-    try {
-      await this.sendDmOnline(payload);
-    } catch (err) {
-      if (!(err instanceof UnreachableError)) throw err;
-      await this.sendDmLan(payload);
-      note = LAN_NOTE;
-    }
-    this.store(peerUserId, peerUsername, { id: payload.id, from: 'me', text: payload.text, sentAt: payload.sentAt, ...(note ? { note } : {}) });
+    const note = await this.deliverDm(payload);
+    this.store(peerUserId, peerUsername, {
+      id: payload.id,
+      from: 'me',
+      text: payload.text,
+      sentAt: payload.sentAt,
+      ...(replyTo ? { reply: replyTo } : {}),
+      ...(opts.forwarded ? { forwarded: true } : {}),
+      ...(note ? { note } : {}),
+    });
     await this.vault.write('messages', this.history);
     return this.conversation(peerUserId);
   }
 
-  private async sendDmOnline(payload: DirectMessagePayload) {
+  /** Adds or takes back our reaction to a message in a DM. It goes to both of us like a message does. */
+  async reactInDmMessage(peerUserId: string, peerUsername: string, messageId: string, emoji: string, on: boolean): Promise<Conversation> {
+    const target = this.history.conversations[peerUserId]?.messages.find((m) => m.id === messageId);
+    if (!target || target.error) throw new Error('You can’t react to that message.');
+    const payload: DirectReactionPayload = {
+      v: 1,
+      kind: 'dmReaction',
+      id: randomUUID(),
+      peerUserId,
+      peerUsername,
+      messageId,
+      emoji: Emoji.parse(emoji),
+      on,
+      sentAt: new Date().toISOString(),
+      ...(this.accessKey ? { accessKey: this.accessKey } : {}),
+    };
+    await this.deliverDm(payload);
+    applyReaction(target, { userId: this.api.userId, username: 'You', emoji: payload.emoji, at: payload.sentAt, on });
+    await this.vault.write('messages', this.history);
+    return this.conversation(peerUserId);
+  }
+
+  private async sendDmOnline(payload: DirectPayload) {
     const { peerUserId, peerUsername } = payload;
     const plaintext = new TextEncoder().encode(JSON.stringify(payload));
     const key = this.sealed.peers[peerUserId];
@@ -829,7 +1099,7 @@ export class Messenger {
   }
 
   /** Sends a DM straight to the recipient's devices, and our own, that are linked on the local network. */
-  private async sendDmLan(payload: DirectMessagePayload) {
+  private async sendDmLan(payload: DirectPayload) {
     const ids = Object.values(this.directory.devices)
       .filter((d) => d.userId === payload.peerUserId || d.userId === this.api.userId)
       .map((d) => d.deviceId);

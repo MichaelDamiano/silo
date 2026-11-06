@@ -108,6 +108,32 @@ export const Envelope = z.union([IdentifiedEnvelope, SealedEnvelope]);
 export const EnvelopeList = z.object({ envelopes: z.array(Envelope) });
 export const AckRequest = z.object({ ids: z.array(z.uuid()).min(1).max(500) });
 
+/** Message ids are UUIDs, except placeholders for messages that couldn't be read. */
+const MessageRef = z.string().min(1).max(64);
+
+/**
+ * One emoji, possibly with skin tone, variation selector or joiners. Plain text isn't
+ * allowed, so a reaction can't be used to slip a message or a link past anyone.
+ */
+export const Emoji = z
+  .string()
+  .min(1)
+  .max(32)
+  .regex(/^[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200d\ufe0f\u20e3]+$/u, 'must be an emoji');
+
+/**
+ * What a reply points at. The quote is the sender's claim; a recipient that has the
+ * original shows its own copy instead, so a reply can't put words in someone's mouth.
+ */
+export const ReplyRef = z.object({ id: MessageRef, userId: z.uuid(), text: z.string().max(400) });
+
+/** Fields any message can carry: a reply, or a mark that it was forwarded from elsewhere. */
+const MessageExtras = {
+  replyTo: ReplyRef.optional(),
+  /** Forwarded messages say so, but not who wrote them or where they came from. */
+  forwarded: z.literal(true).optional(),
+};
+
 /** The plaintext inside each Signal message. The server never sees this. */
 export const DirectMessagePayload = z.object({
   v: z.literal(1),
@@ -120,7 +146,26 @@ export const DirectMessagePayload = z.object({
   text: z.string().min(1).max(4000),
   /** The sender's access key, so the recipient can send sealed messages back. */
   accessKey: AccessKey.optional(),
+  ...MessageExtras,
 });
+
+/** Adds or takes back an emoji reaction to a message in a direct conversation. */
+export const DirectReactionPayload = z.object({
+  v: z.literal(1),
+  kind: z.literal('dmReaction'),
+  id: z.uuid(),
+  peerUserId: z.uuid(),
+  peerUsername: z.string(),
+  messageId: MessageRef,
+  emoji: Emoji,
+  /** False takes the reaction back. */
+  on: z.boolean(),
+  sentAt: z.iso.datetime(),
+  accessKey: AccessKey.optional(),
+});
+
+/** Anything that belongs to a direct conversation. */
+export const DirectPayload = z.discriminatedUnion('kind', [DirectMessagePayload, DirectReactionPayload]);
 
 export type UploadKeysRequest = z.infer<typeof UploadKeysRequest>;
 export type DeviceBundle = z.infer<typeof DeviceBundle>;
@@ -129,6 +174,9 @@ export type IdentifiedEnvelope = z.infer<typeof IdentifiedEnvelope>;
 export type SealedEnvelope = z.infer<typeof SealedEnvelope>;
 export type SendMessagesRequest = z.infer<typeof SendMessagesRequest>;
 export type DirectMessagePayload = z.infer<typeof DirectMessagePayload>;
+export type DirectReactionPayload = z.infer<typeof DirectReactionPayload>;
+export type DirectPayload = z.infer<typeof DirectPayload>;
+export type ReplyRef = z.infer<typeof ReplyRef>;
 
 /**
  * Sent inside a pairwise Signal message to hand over the sender's key for one
@@ -144,7 +192,7 @@ export const SenderKeyPayload = z.object({
 });
 
 /** Anything that can arrive inside a pairwise Signal message. */
-export const PairwisePayload = z.discriminatedUnion('kind', [DirectMessagePayload, SenderKeyPayload]);
+export const PairwisePayload = z.discriminatedUnion('kind', [DirectMessagePayload, DirectReactionPayload, SenderKeyPayload]);
 
 /** The plaintext of a channel message, encrypted once with the sender's key. */
 export const ChannelMessagePayload = z.object({
@@ -155,7 +203,24 @@ export const ChannelMessagePayload = z.object({
   channelId: z.uuid(),
   sentAt: z.iso.datetime(),
   text: z.string().min(1).max(4000),
+  ...MessageExtras,
 });
+
+/** Adds or takes back an emoji reaction to a channel message, encrypted with the sender's key like a message. */
+export const ChannelReactionPayload = z.object({
+  v: z.literal(1),
+  kind: z.literal('reaction'),
+  id: z.uuid(),
+  spaceId: z.uuid(),
+  channelId: z.uuid(),
+  messageId: MessageRef,
+  emoji: Emoji,
+  on: z.boolean(),
+  sentAt: z.iso.datetime(),
+});
+
+/** Anything that can arrive encrypted with a channel sender key. */
+export const ChannelPayload = z.discriminatedUnion('kind', [ChannelMessagePayload, ChannelReactionPayload]);
 
 /** Every member device of a space that can receive encrypted messages, except the caller's. */
 export const SpaceDevicesResponse = z.object({
@@ -192,4 +257,6 @@ export const ChannelMessageList = z.object({ messages: z.array(ChannelMessage) }
 export type SenderKeyPayload = z.infer<typeof SenderKeyPayload>;
 export type PairwisePayload = z.infer<typeof PairwisePayload>;
 export type ChannelMessagePayload = z.infer<typeof ChannelMessagePayload>;
+export type ChannelReactionPayload = z.infer<typeof ChannelReactionPayload>;
+export type ChannelPayload = z.infer<typeof ChannelPayload>;
 export type ChannelMessage = z.infer<typeof ChannelMessage>;

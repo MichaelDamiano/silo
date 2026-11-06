@@ -21,6 +21,7 @@ import {
   signupPayload,
   toBase64Url,
   type DeviceKeyPair,
+  Emoji,
 } from '@silo/protocol';
 import { z } from 'zod';
 import type { AccountView, LinkTicket, PendingDevice, RecoverInput, SignupInput } from '../shared/ipc.js';
@@ -35,7 +36,22 @@ import type { AppEvent, ChannelView, ConnectionView, Conversation, ConversationS
 const DmActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('list') }),
   z.object({ kind: z.literal('get'), peerUserId: z.uuid(), peerUsername: z.string().max(32).optional() }),
-  z.object({ kind: z.literal('send'), peerUserId: z.uuid(), peerUsername: z.string().max(32), text: z.string().max(4000) }),
+  z.object({
+    kind: z.literal('send'),
+    peerUserId: z.uuid(),
+    peerUsername: z.string().max(32),
+    text: z.string().max(4000),
+    replyTo: z.string().max(64).optional(),
+    forwarded: z.boolean().optional(),
+  }),
+  z.object({
+    kind: z.literal('react'),
+    peerUserId: z.uuid(),
+    peerUsername: z.string().max(32),
+    messageId: z.string().max(64),
+    emoji: Emoji,
+    on: z.boolean(),
+  }),
 ]);
 
 const ConnectionActionSchema = z.discriminatedUnion('kind', [
@@ -53,7 +69,15 @@ const ConnectionActionSchema = z.discriminatedUnion('kind', [
 
 const ChannelActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('get'), spaceId: z.uuid(), channelId: z.uuid() }),
-  z.object({ kind: z.literal('send'), spaceId: z.uuid(), channelId: z.uuid(), text: z.string().max(4000) }),
+  z.object({
+    kind: z.literal('send'),
+    spaceId: z.uuid(),
+    channelId: z.uuid(),
+    text: z.string().max(4000),
+    replyTo: z.string().max(64).optional(),
+    forwarded: z.boolean().optional(),
+  }),
+  z.object({ kind: z.literal('react'), spaceId: z.uuid(), channelId: z.uuid(), messageId: z.string().max(64), emoji: Emoji, on: z.boolean() }),
 ]);
 
 export { normalizeServerUrl } from './servers.js';
@@ -161,7 +185,8 @@ export class SiloClient {
     if (!m) throw new Error('Encrypted messaging isn’t running on this device.');
     if (a.kind === 'list') return m.conversations();
     if (a.kind === 'get') return m.conversation(a.peerUserId, a.peerUsername);
-    return m.send(a.peerUserId, a.peerUsername, a.text);
+    if (a.kind === 'react') return m.reactInDmMessage(a.peerUserId, a.peerUsername, a.messageId, a.emoji, a.on);
+    return m.send(a.peerUserId, a.peerUsername, a.text, { replyTo: a.replyTo, forwarded: a.forwarded });
   }
 
   async safety(input: unknown): Promise<unknown> {
@@ -208,7 +233,8 @@ export class SiloClient {
     const m = this.messenger;
     if (!m) throw new Error('Encrypted messaging isn’t running on this device.');
     if (a.kind === 'get') return m.channel(a.channelId);
-    return m.sendToChannel(a.spaceId, a.channelId, a.text);
+    if (a.kind === 'react') return m.reactInChannelMessage(a.spaceId, a.channelId, a.messageId, a.emoji, a.on);
+    return m.sendToChannel(a.spaceId, a.channelId, a.text, { replyTo: a.replyTo, forwarded: a.forwarded });
   }
 
   get publicKey() {

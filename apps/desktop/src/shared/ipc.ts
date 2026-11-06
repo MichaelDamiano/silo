@@ -33,7 +33,32 @@ export interface SiloBridge {
 
 export type Role = 'owner' | 'admin' | 'member';
 
-export interface DmMessage {
+/** The message a reply answers, as this device shows it. */
+export interface ReplyView {
+  id: string;
+  author: string;
+  text: string;
+  /** The original isn't on this device, so the quote is only what the sender says it was. */
+  missing?: boolean;
+}
+
+export interface ReactionView {
+  emoji: string;
+  count: number;
+  /** Whether this account is one of them, so clicking takes it back. */
+  mine: boolean;
+  names: string[];
+}
+
+/** What replies, forwards and reactions add to any message. */
+interface MessageExtras {
+  replyTo?: ReplyView;
+  /** Copied from another conversation. Who wrote it originally isn't shown. */
+  forwarded?: boolean;
+  reactions?: ReactionView[];
+}
+
+export interface DmMessage extends MessageExtras {
   id: string;
   from: 'me' | 'them';
   text: string;
@@ -59,11 +84,12 @@ export interface Conversation {
 export type DmAction =
   | { kind: 'list' }
   | { kind: 'get'; peerUserId: string; peerUsername?: string }
-  | { kind: 'send'; peerUserId: string; peerUsername: string; text: string };
+  | { kind: 'send'; peerUserId: string; peerUsername: string; text: string; replyTo?: string; forwarded?: boolean }
+  | { kind: 'react'; peerUserId: string; peerUsername: string; messageId: string; emoji: string; on: boolean };
 
 export type DmResult<A extends DmAction> = A['kind'] extends 'list' ? ConversationSummary[] : Conversation;
 
-export interface ChannelMessageView {
+export interface ChannelMessageView extends MessageExtras {
   id: string;
   from: 'me' | 'them';
   senderUserId: string;
@@ -86,7 +112,8 @@ export interface ChannelView {
 
 export type ChannelAction =
   | { kind: 'get'; spaceId: string; channelId: string }
-  | { kind: 'send'; spaceId: string; channelId: string; text: string };
+  | { kind: 'send'; spaceId: string; channelId: string; text: string; replyTo?: string; forwarded?: boolean }
+  | { kind: 'react'; spaceId: string; channelId: string; messageId: string; emoji: string; on: boolean };
 
 export interface TorSettings {
   proxyHost: string;
