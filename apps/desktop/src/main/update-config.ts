@@ -11,4 +11,6 @@
 
 export const UPDATE_FEED = 'https://github.com/MichaelDamiano/silo/releases';
 
-export const UPDATE_KEYS: string[] = [];
+export const UPDATE_KEYS: string[] = [
+  'VlphmI+VkPLV5kSQ0Z82wLZ2nQ32v7x04DjXpvfOFJI=',
+];
