@@ -123,3 +123,6 @@ button.reaction.mine { border-color: var(--accent); color: var(--accent); }
 .dialog h2 { margin-top: 0; }
 .forward-preview { font-size: 13px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); white-space: pre-wrap; word-break: break-word; }
 ul.forward-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; }
+.update-banner { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--accent); font-size: 13px; }
+.update-banner button { padding: 4px 10px; font-size: 13px; }
+.update-banner .error-text { color: var(--error); }

@@ -29,6 +29,27 @@ export interface SiloBridge {
   space<A extends SpaceAction>(action: A): Promise<Result<SpaceResult<A>>>;
   /** Blocking, safety numbers, and reports to moderators. */
   safety<A extends SafetyAction>(action: A): Promise<Result<SafetyResult<A>>>;
+  /** Automatic updates: check, install a downloaded update, or turn automatic checks on or off. */
+  update(action: UpdateAction): Promise<Result<UpdateView>>;
+}
+
+export type UpdateAction = { kind: 'get' } | { kind: 'check' } | { kind: 'install' } | { kind: 'openDownload' } | { kind: 'setAuto'; enabled: boolean };
+
+export interface UpdateView {
+  /** `disabled` means this build has no update key (for example a development build). */
+  status: 'disabled' | 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'ready' | 'error';
+  current: string;
+  /** The newer version found, if any. */
+  version?: string;
+  notes?: string;
+  /** Whether this device can install the update by itself (Windows), or has to download it by hand. */
+  canInstall: boolean;
+  /** 0 to 1 while downloading. */
+  progress?: number;
+  error?: string;
+  checkedAt?: string;
+  /** Checks run at startup and every few hours unless turned off. */
+  auto?: boolean;
 }
 
 export type Role = 'owner' | 'admin' | 'member';
@@ -143,6 +164,7 @@ export type AppEvent =
   /** Who is linked on the local network right now. */
   | { type: 'lan'; peers: string[] }
   | { type: 'channel'; channelId: string }
+  | { type: 'update'; view: UpdateView }
   | { type: 'error'; message: string };
 
 export interface SpaceSummary {
@@ -241,6 +263,7 @@ export const IPC = {
   channel: 'silo:channel',
   connection: 'silo:connection',
   safety: 'silo:safety',
+  update: 'silo:update',
   event: 'silo:event',
 } as const;
 

@@ -30,7 +30,7 @@ import { HttpStatusError, Messenger } from './messenger.js';
 import { Safety } from './safety.js';
 import type { Vault } from './vault.js';
 import { ServerDirectory, type KnownServer } from './servers.js';
-import { UnreachableError, type Transport } from './transport.js';
+import { UnreachableError, type TorSettings, type Transport } from './transport.js';
 import type { AppEvent, ChannelView, ConnectionView, Conversation, ConversationSummary } from '../shared/ipc.js';
 
 const DmActionSchema = z.discriminatedUnion('kind', [
@@ -114,6 +114,11 @@ export class SiloClient {
     private readonly vault?: Vault,
     private readonly emit: (event: AppEvent) => void = () => undefined,
   ) {}
+
+  /** The Tor settings, so other traffic such as update checks can follow them. */
+  async torSettings(): Promise<TorSettings> {
+    return (await this.directory()).tor;
+  }
 
   private directory(): Promise<ServerDirectory> {
     return (this.dir ??= ServerDirectory.open(this.vault));

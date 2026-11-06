@@ -41,3 +41,13 @@ mac:
   category: public.app-category.social-networking
 win:
   target: [nsis]
+# A one-click installer that installs for the current user only, so it needs no
+# administrator prompt, and updates can run it silently (see src/main/updater.ts).
+nsis:
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  differentialPackage: false

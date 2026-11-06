@@ -13,7 +13,9 @@
     "start": "electron .",
     "test": "vitest run",
     "dist": "npm run build:deps && npm run build && electron-builder --publish never",
-    "verify-release": "node scripts/verify-release.mjs"
+    "verify-release": "node scripts/verify-release.mjs",
+    "release-key": "node scripts/release-key.mjs",
+    "sign-release": "node scripts/sign-release.mjs"
   },
   "dependencies": {
     "@silo/protocol": "0.1.0",

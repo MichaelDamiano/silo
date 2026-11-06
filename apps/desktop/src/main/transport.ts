@@ -53,7 +53,7 @@ export class UnreachableError extends Error {
  * With `isolate`, it gives Tor a random username and password, which makes Tor use a
  * separate circuit, and never reuses a connection.
  */
-function socksAgent(tor: TorSettings, isolate = false): Agent {
+export function socksAgent(tor: TorSettings, isolate = false): Agent {
   const auth = isolate ? { userId: randomBytes(12).toString('hex'), password: randomBytes(12).toString('hex') } : {};
   return new Agent({
     ...(isolate ? { pipelining: 0 } : {}),

@@ -1,9 +1,14 @@
-import { app, BrowserWindow, ipcMain, Menu, protocol, safeStorage, session, type IpcMainInvokeEvent } from 'electron';
-import { readFile } from 'node:fs/promises';
+import { app, BrowserWindow, ipcMain, Menu, protocol, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron';
+import { spawn } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { allowedRequest, APP_INDEX, APP_SCHEME, isAppPage, RENDERER_CSP, resolveAppFile } from './app-protocol.js';
-import { IPC, type RecoverInput, type Result, type SignupInput } from '../shared/ipc.js';
+import { IPC, type RecoverInput, type Result, type SignupInput, type UpdateAction } from '../shared/ipc.js';
+import { fetch as undiciFetch } from 'undici';
+import { DEFAULT_TOR, socksAgent, type TorSettings } from './transport.js';
+import { UPDATE_FEED, UPDATE_KEYS } from './update-config.js';
+import { Updater } from './updater.js';
 import { SiloClient } from './api.js';
 import { loadOrCreateDeviceKey, type SecretBox } from './keystore.js';
 import { Vault } from './vault.js';
@@ -171,11 +176,81 @@ app.whenReady().then(async () => {
   handle(IPC.space, (action: unknown) => wrap(() => need().space(action)));
   handle(IPC.safety, (action: unknown) => wrap(() => need().safety(action)));
 
+  setupUpdates(() => client?.torSettings() ?? Promise.resolve(DEFAULT_TOR));
+
   await createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });
 });
+
+const UPDATE_EVERY = 6 * 60 * 60_000;
+
+/** Signed automatic updates. Off in development builds, which have no reason to replace themselves. */
+function setupUpdates(tor: () => Promise<TorSettings>) {
+  const prefsFile = path.join(app.getPath('userData'), 'updates.json');
+  let auto = true;
+  const updater = new Updater({
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    feed: UPDATE_FEED,
+    keys: dev ? [] : UPDATE_KEYS,
+    dir: path.join(app.getPath('userData'), 'updates'),
+    // When Silo is set to send everything through Tor, update checks go through Tor too, on their own circuit.
+    fetch: async (url, init) => {
+      const t = await tor();
+      const dispatcher = t.always ? socksAgent(t, true) : undefined;
+      try {
+        const res = await undiciFetch(url, { ...init, redirect: 'follow', ...(dispatcher ? { dispatcher } : {}) });
+        return res as unknown as Response;
+      } finally {
+        // close() lets the response body finish streaming, then frees the connection.
+        if (dispatcher) void dispatcher.close();
+      }
+    },
+    launch: (installer) => {
+      // electron-builder's installer: /S installs silently, --updated keeps settings, --force-run starts Silo again.
+      spawn(installer, ['--updated', '/S', '--force-run'], { detached: true, stdio: 'ignore' }).unref();
+      app.quit();
+    },
+    onChange: (view) => emit({ type: 'update', view: { ...view, auto } }),
+  });
+  const view = () => ({ ...updater.state, auto });
+
+  void readFile(prefsFile, 'utf8')
+    .then((t) => {
+      auto = (JSON.parse(t) as { auto?: unknown }).auto !== false;
+    })
+    .catch(() => undefined)
+    .finally(() => {
+      const tick = () => auto && void updater.check();
+      setTimeout(tick, 15_000).unref();
+      setInterval(tick, UPDATE_EVERY).unref();
+    });
+
+  handle(IPC.update, (action: UpdateAction) =>
+    wrap(async () => {
+      switch (action?.kind) {
+        case 'check':
+          await updater.check();
+          break;
+        case 'install':
+          await updater.install();
+          break;
+        case 'openDownload':
+          // A fixed address, never one from the network.
+          await shell.openExternal(`${UPDATE_FEED}/latest`);
+          break;
+        case 'setAuto':
+          auto = action.enabled === true;
+          await writeFile(prefsFile, JSON.stringify({ auto }));
+          break;
+      }
+      return view();
+    }),
+  );
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
