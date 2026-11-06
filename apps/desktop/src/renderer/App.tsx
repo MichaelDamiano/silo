@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import type { AccountView, ConversationSummary, DeviceInfo, LinkTicket, PendingDevice, Result, SpaceSummary } from '../shared/ipc';
 import { DmPage } from './Dms';
 import { ConnectionSettings } from './Connection';
+import { UpdateSettings } from './Updates';
 import { NewSpace, Sidebar, SpacePage } from './Spaces';
 
 type Mode = 'signup' | 'login' | 'link' | 'recover';
@@ -420,6 +421,9 @@ function AccountScreen({
 
       <h2>Connection</h2>
       <ConnectionSettings signedIn />
+
+      <h2>Updates</h2>
+      <UpdateSettings />
 
       {error && <div className="error">{error}</div>}
 

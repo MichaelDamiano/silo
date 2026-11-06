@@ -98,6 +98,7 @@ Then add the relay to the server's published list, for example `PUBLIC_URLS=http
 - Release builds turn off the Electron features an attacker with local access could use to run their own code as Silo, refuse debugger switches, and serve the app only from `app://silo/`.
 - Builds are reproducible: anyone can rebuild a release and check it with `npm run verify-release -w @silo/desktop -- <download>`. See [docs/reproducible-builds.md](docs/reproducible-builds.md).
 - Pushing a `v*` tag builds Linux, macOS and Windows versions and attaches them, with checksums, to a draft GitHub release.
+- The Windows installer needs no administrator rights. Installed copies update themselves, but only to releases signed with the offline release key, and only after checking the download's hash. See [docs/updates.md](docs/updates.md) for installing, how updates are checked, and how to sign and publish a release.
 
 ## Layout
 

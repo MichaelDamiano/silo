@@ -61,5 +61,5 @@ jobs:
         run: |
           cat out/SHA256SUMS-*.txt > out/SHA256SUMS.txt
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-            --title "Silo $TAG" --notes "Check a download with: npm run verify-release -w @silo/desktop -- <file>. See docs/reproducible-builds.md." \
+            --title "Silo $TAG" --notes "Before publishing: sign SHA256SUMS.txt with npm run sign-release and attach silo-update.json, or installed copies won't update (docs/updates.md). Check a download with: npm run verify-release -w @silo/desktop -- <file>. See docs/reproducible-builds.md." \
             out/*

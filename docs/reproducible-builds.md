@@ -62,5 +62,6 @@ denied, and no network access of its own: every request it makes other than to
 
 - Code signing and notarization. Release builds are unsigned until signing keys
   are set up, so macOS and Windows will warn on first launch.
-- Automatic updates. There are none; download new versions yourself and check them
-  as above.
+
+Automatic updates are signed with a separate offline release key, independent of
+code signing. See [updates.md](updates.md).
