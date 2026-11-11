@@ -29,7 +29,7 @@ jobs:
       # Code scanning results can only be uploaded to public repositories (or private
       # ones with GitHub Code Security). Elsewhere we keep the results local and fail
       # the job ourselves when CodeQL finds anything.
-      - uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           upload: ${{ github.event.repository.visibility == 'public' && 'always' || 'never' }}
           output: sarif-results
