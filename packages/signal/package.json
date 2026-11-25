@@ -13,12 +13,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@signalapp/libsignal-client": "0.106.1",
+    "@signalapp/libsignal-client": "0.108.5",
     "@silo/protocol": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "typescript": "~7.0.2",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
